@@ -1,0 +1,14 @@
+Ticket de Venta
+Carnicería XYZ
+==============================
+ID de venta: 4
+==============================
+Productos:
+costeleta - Cantidad: 1 - Precio: $4500.00
+==============================
+Método de pago: Efectivo
+Total: $4500.00
+Su pago: 5000.0
+Vuelto: 500.0
+Gracias por su compra
+==============================

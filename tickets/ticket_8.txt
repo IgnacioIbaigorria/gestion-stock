@@ -1,0 +1,14 @@
+Ticket de Venta
+Carnicería XYZ
+==============================
+ID de venta: 8
+==============================
+Productos:
+3 - Cantidad: 1 - Precio: $4700.00
+==============================
+Método de pago: Efectivo
+Total: $4700.00
+Su pago: 5000.0
+Vuelto: 300.0
+Gracias por su compra
+==============================

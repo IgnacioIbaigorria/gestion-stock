@@ -1,0 +1,15 @@
+Ticket de Venta
+Carnicería XYZ
+==============================
+ID de venta: 3
+==============================
+Productos:
+costeleta - Cantidad: 1 - Precio: $4500.00
+costilla de cerdo - Cantidad: 1 - Precio: $4700.00
+==============================
+Método de pago: Efectivo
+Total: $9200.00
+Su pago: 10000.0
+Vuelto: <PyQt6.QtWidgets.QLabel object at 0x0000022AC2DF67B0>
+Gracias por su compra
+==============================

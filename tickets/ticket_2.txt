@@ -1,0 +1,13 @@
+Ticket de Venta
+Carnicería XYZ
+==============================
+ID de venta: 2
+Método de pago: Efectivo
+==============================
+Productos:
+Código: 481631849498 - Cantidad: 1 - Precio: $1200.00
+Código: 48161879498 - Cantidad: 1 - Precio: $4500.00
+==============================
+Total: $5700.00
+Gracias por su compra
+==============================

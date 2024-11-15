@@ -1,0 +1,86 @@
+.QLabel, .QDateEdit, .QPushButton, .QComboBox{
+    font-size: 18px;
+    padding: 5px;
+}
+.QInputDialog{
+    font-size: 16;
+}
+/* Estilos para el input del QInputDialog */
+.QInputDialog .QLineEdit {
+    font-size: 20px;  /* Aumenta el tamaño de la fuente */
+    border: 2px solid #cccccc;  /* Añade un borde más grueso */
+    border-radius: 8px;  /* Bordes redondeados */
+    padding: 8px;  /* Espaciado interno */
+}
+
+/* Estilo cuando el QInputDialog está enfocado */
+.QInputDialog .QLineEdit:focus {
+    border: 2px solid #4CAF50;  /* Borde verde al enfocar */
+}
+
+.QLineEdit {
+    font-size: 20px;
+    border: 2px solid #cccccc;  /* Borde más grueso */
+    border-radius: 8px;          /* Bordes redondeados */
+    padding: 8px;                /* Espaciado interno */
+}
+
+.QLineEdit:focus {
+    border: 2px solid #4CAF50;  /* Borde verde al enfocarse */
+}
+
+.QTabWidget {
+    font-size: 16px;
+}
+
+.QTableWidget QHeaderView::section {
+    font-size: 18px;  /* Establece el tamaño de la fuente de las cabeceras */
+    font-weight: 500; /* Opcional: poner las cabeceras en negrita */
+    background-color: #dddddd;
+}
+
+.QTableWidget {
+    font-size: 18px;
+    gridline-color: #cccccc;
+    background-color: #ffffff;
+}
+
+#familySelector {
+    border: 1px solid #cccccc;
+    padding: 5px;
+    border-radius: 5px;
+    font-size: 16px;
+}
+
+#productTable {
+    background-color: #ffffff;
+    font-size: 16px;
+}
+
+#addButton, #updateButton, #deleteButton, #quitarProducto, #registrarVenta {
+    padding: 10px;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    font-size: 16px;
+}
+#addButton, #registrarVenta{
+    background-color: green;
+}
+#deleteButton, #quitarProducto {
+    background-color: red;
+}
+#updateButton {
+    background-color: blue;
+}
+
+#addButton:hover, #updateButton:hover, #deleteButton:hover {
+    background-color: #0056b3;
+}
+
+#vuelto{
+    padding: 30px;
+}
+#total {
+    padding: 30px;
+}

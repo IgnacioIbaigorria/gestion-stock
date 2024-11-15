@@ -1,0 +1,12 @@
+Ticket de Venta
+Carnicería XYZ
+==============================
+ID de venta: 7
+==============================
+Productos:
+costilla de cerdo x KG - Cantidad: 1 - Precio: $4700.00
+==============================
+Método de pago: Débito
+Total: $4700.00
+Gracias por su compra
+==============================
