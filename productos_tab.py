@@ -1,5 +1,7 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QHeaderView, QTableWidgetItem, QLineEdit, QTableWidget, QComboBox, QHBoxLayout, QLabel, QMessageBox
-from db import agregar_producto, actualizar_producto, eliminar_producto, buscar_producto_por_familia, existe_producto
+from db import agregar_producto, actualizar_producto, buscar_producto, eliminar_producto, existe_producto
+from signals import signals
+from PyQt6.QtCore import Qt
 
 class ProductosTab(QWidget):
     def __init__(self):
@@ -10,24 +12,17 @@ class ProductosTab(QWidget):
         # Layout principal
         layout = QVBoxLayout()
 
-        # Selector de familia
-        self.family_selector = QComboBox()
-        self.family_selector.setObjectName("familySelector")
-        self.family_selector.addItems(["Todas", "Carne", "Pollo", "Mercado"])
-        self.family_selector.currentTextChanged.connect(self.buscar_productos_por_familia)
-        layout.addWidget(QLabel("Filtrar por familia:"))
-        layout.addWidget(self.family_selector)
-
         # Barra de búsqueda
         self.search_bar = QLineEdit()
         self.search_bar.setPlaceholderText("Buscar producto por nombre o código de barras")
         self.search_bar.textChanged.connect(self.buscar_productos)
+        signals.venta_realizada.connect(self.buscar_productos)
         layout.addWidget(self.search_bar)
 
         # Tabla de productos
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 7)
         self.table.setObjectName("productTable")
-        self.table.setHorizontalHeaderLabels(["Código", "Nombre", "Cantidad", "Tipo de Venta","Costo", "Venta", "Margen", "Familia"])
+        self.table.setHorizontalHeaderLabels(["Código", "Nombre", "Cantidad", "Tipo de Venta","Costo", "Venta", "Margen"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.itemSelectionChanged.connect(self.cargar_datos_producto)  # Conectar selección a método
@@ -66,12 +61,6 @@ class ProductosTab(QWidget):
         self.margen_ganancia.textChanged.connect(self.calcular_margen_o_precio_venta)
         form_layout.addWidget(self.margen_ganancia)
         
-        # Selector de familia para agregar/editar productos
-        self.familia = QComboBox()
-        self.familia.addItem("Familia:")
-        self.familia.addItems(["Carne", "Cerdo", "Pollo", "Mercado"])
-        form_layout.addWidget(self.familia)
-
         layout.addLayout(form_layout)
 
         # Botones
@@ -95,7 +84,7 @@ class ProductosTab(QWidget):
         self.setLayout(layout)
 
         # Cargar todos los productos al iniciar
-        self.buscar_productos_por_familia()
+        self.buscar_productos()
         
     def calcular_margen_o_precio_venta(self):
         """
@@ -151,11 +140,10 @@ class ProductosTab(QWidget):
             QMessageBox.warning(self, "Error", "Los campos de cantidad, costo, venta y margen deben ser números.")
             return
 
-        familia = self.familia.currentText()
-        if agregar_producto(codigo, nombre, costo, venta, margen, familia, cantidad, venta_por_peso):
+        if agregar_producto(codigo, nombre, costo, venta, margen, cantidad, venta_por_peso):
             QMessageBox.information(self, "Éxito", "Producto agregado correctamente")
             self.limpiar_entradas()
-            self.buscar_productos_por_familia()
+            self.buscar_productos()
         else:
             QMessageBox.warning(self, "Error", "No se pudo agregar el producto")
 
@@ -164,11 +152,7 @@ class ProductosTab(QWidget):
         if not self.codigo_barras.text() or not self.nombre.text():
             QMessageBox.warning(self, "Error", "Por favor, complete todos los campos requeridos.")
             return
-        
-        if self.familia.currentIndex() == 0:  # Verificar que no esté en "Familia:"
-            QMessageBox.warning(self, "Error", "Seleccione una familia válida.")
-            return
-        
+                
         codigo = self.codigo_barras.text()
         nombre = self.nombre.text()
         venta_por_peso = 1 if self.tipo_venta.currentText() == "Por Peso" else 0
@@ -186,11 +170,10 @@ class ProductosTab(QWidget):
             return
 
         # Actualizar el producto en la base de datos
-        familia = self.familia.currentText()
-        if actualizar_producto(codigo, nombre, costo, venta, margen, familia, cantidad):
+        if actualizar_producto(codigo, nombre, costo, venta, margen, cantidad, venta_por_peso):
             QMessageBox.information(self, "Éxito", "Producto actualizado correctamente")
             self.limpiar_entradas()
-            self.buscar_productos_por_familia()  # Actualizar lista de productos
+            self.buscar_productos()  # Actualizar lista de productos
         else:
             QMessageBox.warning(self, "Error", "No se pudo actualizar el producto")
             
@@ -205,7 +188,6 @@ class ProductosTab(QWidget):
         costo = self.table.item(row, 4).text()
         venta = self.table.item(row, 5).text()
         margen = self.table.item(row, 6).text()
-        familia = self.table.item(row, 7).text()
 
         self.codigo_barras.setText(codigo)
         self.nombre.setText(nombre)
@@ -213,7 +195,6 @@ class ProductosTab(QWidget):
         self.precio_costo.setText(costo)
         self.precio_venta.setText(venta)
         self.margen_ganancia.setText(margen)
-        self.familia.setCurrentText(familia)
 
         # Determinar si se vende por peso o por unidad
         venta_por_peso = 1 if "." in cantidad else 0
@@ -221,14 +202,33 @@ class ProductosTab(QWidget):
 
 
     def eliminar_producto(self):
-        codigo = self.codigo_barras.text()
+        # Crear el cuadro de diálogo de pregunta
+        mensaje = QMessageBox(self)
+        mensaje.setWindowTitle("Eliminar producto")
+        mensaje.setText("¿Está seguro de eliminar el producto?")
+        mensaje.setIcon(QMessageBox.Icon.Question)
         
-        if eliminar_producto(codigo):
-            QMessageBox.information(self, "Éxito", "Producto eliminado correctamente")
-            self.limpiar_entradas()
-            self.buscar_productos_por_familia()
+        # Personalizar los botones
+        btn_si = mensaje.addButton("Sí", QMessageBox.ButtonRole.YesRole)  # Correcto para PyQt6
+        btn_no = mensaje.addButton("No", QMessageBox.ButtonRole.NoRole)  # Correcto para PyQt6
+        
+        # Establecer el botón por defecto
+        mensaje.setDefaultButton(btn_no)
+        
+        # Mostrar el cuadro de diálogo
+        mensaje.exec()
+
+        # Verificar cuál botón fue presionado
+        if mensaje.clickedButton() == btn_si:
+            nombre = self.nombre.text()
+            if eliminar_producto(nombre):
+                QMessageBox.information(self, "Éxito", "Producto eliminado correctamente")
+                self.limpiar_entradas()
+                self.buscar_productos()
+            else:
+                QMessageBox.warning(self, "Error", "No se pudo eliminar el producto")
         else:
-            QMessageBox.warning(self, "Error", "No se pudo eliminar el producto")
+            return
             
     def actualizar_tabla(self, productos):
         # Limpiar la tabla y mostrar los productos
@@ -255,16 +255,9 @@ class ProductosTab(QWidget):
                 self.table.setItem(row, i, QTableWidgetItem(str(dato)))
 
     def buscar_productos(self):
-        # Filtrado de productos según la búsqueda y familia
+        # Filtrado de productos según la búsqueda
         term = self.search_bar.text()
-        familia = self.family_selector.currentText()
-        productos = buscar_producto_por_familia(term, familia)
-        self.actualizar_tabla(productos)
-
-    def buscar_productos_por_familia(self):
-        # Filtrado de productos solo por familia
-        familia = self.family_selector.currentText()
-        productos = buscar_producto_por_familia("", familia)
+        productos = buscar_producto(term)
         self.actualizar_tabla(productos)
     
     def limpiar_entradas(self):
@@ -274,6 +267,7 @@ class ProductosTab(QWidget):
         self.margen_ganancia.textChanged.disconnect()
 
         # Limpiar los campos de texto
+        self.search_bar.clear()
         self.nombre.clear()
         self.cantidad.clear()
         self.codigo_barras.clear()
@@ -281,10 +275,9 @@ class ProductosTab(QWidget):
         self.precio_venta.clear()
         self.margen_ganancia.clear()
         
-        # Restablecer el selector de familia al primer elemento de la lista
-        self.familia.setCurrentIndex(0)
-
         # Reconectar las señales
         self.precio_costo.textChanged.connect(self.calcular_margen_o_precio_venta)
         self.precio_venta.textChanged.connect(self.calcular_margen_o_precio_venta)
         self.margen_ganancia.textChanged.connect(self.calcular_margen_o_precio_venta)
+
+                

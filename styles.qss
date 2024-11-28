@@ -57,14 +57,14 @@
     font-size: 16px;
 }
 
-#addButton, #updateButton, #deleteButton, #quitarProducto, #registrarVenta {
+#addButton, #updateButton, #deleteButton, #quitarProducto, #registrarVenta, #botonRecaudacionDiaria, #botonRecaudacionPeriodo, #clienteButton, #pagoButton {
     padding: 10px;
     color: white;
     border: none;
     border-radius: 5px;
-    font-size: 16px;
+    font-size: 18px;
 }
-#addButton, #registrarVenta{
+#addButton, #registrarVenta, #clienteButton, #pagoButton {
     background-color: green;
 }
 #deleteButton, #quitarProducto {
@@ -73,8 +73,11 @@
 #updateButton {
     background-color: blue;
 }
+#botonRecaudacionDiaria, #botonRecaudacionPeriodo {
+    background-color: #1404f8;
+}
 
-#addButton:hover, #updateButton:hover, #deleteButton:hover {
+#addButton:hover, #updateButton:hover, #deleteButton:hover, #botonRecaudacionDiaria::hover, #botonRecaudacionPeriodo::hover, #clienteButton::hover {
     background-color: #0056b3;
 }
 

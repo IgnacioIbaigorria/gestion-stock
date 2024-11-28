@@ -1,5 +1,6 @@
 from PyQt6.QtWidgets import QWidget, QToolTip, QMessageBox, QVBoxLayout, QHeaderView, QLabel, QDateEdit, QPushButton, QTableWidget, QTableWidgetItem, QHBoxLayout
 from PyQt6.QtCore import QDate
+from datetime import date
 from db import obtener_ventas_por_dia, obtener_ventas_por_periodo
 
 class CajaTab(QWidget):
@@ -17,6 +18,7 @@ class CajaTab(QWidget):
         self.daily_date.setCalendarPopup(True)
         
         self.daily_button = QPushButton("Calcular Recaudación Diaria")
+        self.daily_button.setObjectName("botonRecaudacionDiaria")
         self.daily_button.clicked.connect(self.calcular_recaudacion_diaria)
 
         # Layout para la recaudación diaria
@@ -31,7 +33,7 @@ class CajaTab(QWidget):
         self.period_revenue_label = QLabel("Recaudación por período:")
         self.period_profit_label = QLabel("Ganancia por período:")
         self.start_date = QDateEdit()
-        self.start_date.setDate(QDate.currentDate())
+        self.start_date.setDate(date.today().replace(day=1))
         self.start_date.setCalendarPopup(True)
         
         self.end_date = QDateEdit()
@@ -39,6 +41,7 @@ class CajaTab(QWidget):
         self.end_date.setCalendarPopup(True)
         
         self.period_button = QPushButton("Calcular Recaudación por Período")
+        self.period_button.setObjectName("botonRecaudacionPeriodo")
         self.period_button.clicked.connect(self.calcular_recaudacion_periodo)
 
         # Layout para la recaudación por período
@@ -76,6 +79,8 @@ class CajaTab(QWidget):
         ganancia_total = sum(venta[4] for venta in ventas)  # Suma de ganancias
         self.daily_revenue_label.setText(f"Recaudación del día: ${total:.2f}")
         self.daily_profit_label.setText(f"Ganancia del día: ${ganancia_total:.2f}")
+        self.period_revenue_label.setText(f"Recaudación por período: ")
+        self.period_profit_label.setText(f"Ganancia por período: ")
         
         # Mostrar las ventas en la tabla
         self.mostrar_ventas(ventas)
@@ -90,6 +95,9 @@ class CajaTab(QWidget):
         ganancia_total = sum(venta[4] for venta in ventas)  # Suma de ganancias
         self.period_revenue_label.setText(f"Recaudación por período: ${total:.2f}")
         self.period_profit_label.setText(f"Ganancia por período: ${ganancia_total:.2f}")
+        self.daily_revenue_label.setText(f"Recaudación del día: ")
+        self.daily_profit_label.setText(f"Ganancia del día: ")
+
         
         # Mostrar las ventas en la tabla
         self.mostrar_ventas(ventas)
@@ -99,19 +107,24 @@ class CajaTab(QWidget):
         for venta in ventas:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            
-            # Desempaquetar la venta, incluyendo el detalle y ganancia
+
             fecha, monto_total, metodo_pago, detalle, ganancia = venta
-            
-            # Convertir el detalle en un texto para mostrar
-            detalle_texto = "\n".join([f"{nombre} x {cantidad:.2f}kg" if isinstance(cantidad, float) and not cantidad.is_integer() else f"{nombre} x {int(cantidad)}" for nombre, cantidad, _, _ in detalle])
-            
-            # Insertar los datos en la tabla
+
+            if not detalle:
+                # Si no hay detalles, mostrar un mensaje o continuar
+                detalle_texto = "Sin detalles disponibles"
+            else:
+                # Procesar los detalles de la venta
+                detalle_texto = "\n".join([
+                    f"{nombre} - {cantidad:.2f}kg x ${precio_venta}/kg" if isinstance(cantidad, float) and not cantidad.is_integer() 
+                    else f"{nombre} - {int(cantidad)} x ${precio_venta}"
+                    for nombre, cantidad, _, precio_venta in detalle
+                ])
+
             self.table.setItem(row, 0, QTableWidgetItem(str(fecha)))
             self.table.setItem(row, 1, QTableWidgetItem(f"${monto_total:.2f}"))
             self.table.setItem(row, 2, QTableWidgetItem(metodo_pago))
             self.table.setItem(row, 3, QTableWidgetItem(detalle_texto))
-
     def mostrar_tooltip_detalle(self, row, column):
         # Solo mostrar el tooltip si estamos en la columna de detalles
         if column == 3:

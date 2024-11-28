@@ -4,11 +4,12 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget, QVBo
 from productos_tab import ProductosTab
 from ventas_tab import VentasTab
 from caja_tab import CajaTab
+from clientes_tab import ClientesTab
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Gestión de Carnicería")
+        self.setWindowTitle("Gestión de Stock")
         self.setGeometry(100, 100, 800, 600)
 
         # Configuración de pestañas
@@ -18,6 +19,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(ProductosTab(), "Productos")
         self.tabs.addTab(VentasTab(), "Ventas")
         self.tabs.addTab(CajaTab(), "Caja")
+        self.tabs.addTab(ClientesTab(), "Clientes")
 
         self.setCentralWidget(self.tabs)
 
