@@ -1,13 +1,21 @@
 from datetime import datetime
+import sqlite3
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QDialog, QDialogButtonBox, QInputDialog, QPushButton, QHeaderView, QCompleter, QLineEdit, QTableWidget, QTableWidgetItem, QHBoxLayout, QLabel, QMessageBox, QComboBox
 from PyQt6.QtCore import Qt, QStringListModel
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import mm
 from reportlab.lib.utils import simpleSplit
-from db import fetch_productos, obtener_clientes, obtener_producto_por_codigo, obtener_producto_por_id,registrar_venta, buscar_coincidencias_producto
+from config import get_db_path
+from db_postgres import fetch_productos, obtener_clientes, obtener_producto_por_codigo, obtener_producto_por_id,registrar_venta, buscar_coincidencias_producto
 import os
 from signals import signals
+import logging
+import win32print
+import win32api
+
+# Configuración del logger
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class CustomInputDialog(QDialog):
     def __init__(self, label_text, parent=None):
@@ -45,11 +53,23 @@ class CustomInputDialog(QDialog):
         return self.input_field.text()
 
 def parsear_codigo_producto(codigo_barras):
+    """
+    Parsea un código de barras para determinar si es un producto de peso variable.
+    
+    Formato para productos de peso variable:
+    "2" + "0" + [código del producto (5 dígitos)] + [peso en gramos (5 dígitos)] + dígito de control
+    """
+    print(f"Parseando código: {codigo_barras}")
+    
     # Verificar si el código de barras pertenece a un producto a peso variable
-    if len(codigo_barras) == 13 and codigo_barras[:2] == "20":  # Prefijo '20' indica peso variable
-        codigo_producto = codigo_barras[2:6]  # Código de producto (4 dígitos siguientes)
-        peso_gramos = int(codigo_barras[6:11])  # Extraer el peso en gramos (5 dígitos)
+    if len(codigo_barras) == 13 and codigo_barras.startswith("2"):  # Prefijo '2' indica peso variable
+        # Formato: "2" + "0" + [código del producto (5 dígitos)] + [peso en gramos (5 dígitos)] + dígito de control
+        codigo_producto = codigo_barras[2:7]  # Código de producto (5 dígitos)
+        peso_gramos = int(codigo_barras[7:12])  # Extraer el peso en gramos (5 dígitos)
         peso_kg = peso_gramos / 1000  # Convertir a kg
+        
+        print(f"Producto de peso variable detectado: Código={codigo_producto}, Peso={peso_kg}kg")
+        
         return {
             "tipo": "peso_variable",
             "codigo_producto": codigo_producto,
@@ -57,6 +77,7 @@ def parsear_codigo_producto(codigo_barras):
         }
     
     # Si no es peso variable, lo tratamos como un producto unitario
+    print(f"Producto unitario detectado: Código={codigo_barras}")
     return {
         "tipo": "unitario",
         "codigo_producto": codigo_barras
@@ -82,7 +103,7 @@ class VentasTab(QWidget):
         self.completer.setFilterMode(Qt.MatchFlag.MatchContains)
         self.completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         self.product_input.setCompleter(self.completer)
-        self.product_input.returnPressed.connect(self.agregar_producto)
+        self.product_input.returnPressed.connect(self.on_return_pressed)
 
         layout.addWidget(self.product_input)
 
@@ -90,13 +111,14 @@ class VentasTab(QWidget):
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Código", "Nombre", "Cantidad", "Precio"])
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.itemChanged.connect(self.actualizar_cantidad_producto)
         layout.addWidget(self.table)
 
         # Selector de método de pago
         self.payment_method = QComboBox()
-        self.payment_method.addItems(["Efectivo", "Débito", "Transferencia", "A Crédito"])
+        self.payment_method.addItems(["Efectivo", "Débito", "Transferencia", "Crédito"])
         self.payment_method.currentIndexChanged.connect(self.mostrar_selector_cliente)
         layout.addWidget(QLabel("Método de Pago:"))
         layout.addWidget(self.payment_method)
@@ -109,6 +131,7 @@ class VentasTab(QWidget):
         layout.addWidget(self.client_selector)
         
         signals.cliente_agregado.connect(self.cargar_clientes)
+        signals.producto_actualizado.connect(self.inicializar_completers)
 
 
 
@@ -180,136 +203,194 @@ class VentasTab(QWidget):
             self.client_selector.addItem(cliente["nombre"], cliente["id"])
 
     
+    def on_return_pressed(self):
+        codigo_o_nombre = self.product_input.text().strip()
+        if not codigo_o_nombre:
+            return
+        
+        print(f"Procesando entrada: {codigo_o_nombre}")
+        
+        # Parsear el código de barras para determinar si es un producto a peso variable
+        info_producto = parsear_codigo_producto(codigo_o_nombre)
+        
+        if info_producto["tipo"] == "peso_variable":
+            # Es un producto a peso variable
+            codigo_producto = info_producto["codigo_producto"]
+            peso_kg = info_producto["peso_kg"]
+            
+            print(f"Buscando producto con código base: {codigo_producto}")
+            
+            # Buscar el producto por su código
+            producto = obtener_producto_por_codigo(codigo_producto)
+            
+            if producto:
+                print(f"Producto encontrado: {producto[2]}, agregando con peso: {peso_kg}kg")
+                # Agregar el producto con el peso leído del código de barras
+                self.agregar_producto_con_peso(producto, peso_kg)
+            else:
+                QMessageBox.warning(self, "Producto no encontrado", 
+                               f"No se encontró un producto con el código {codigo_producto}.")
+            print(f"No se encontró producto con código: {codigo_producto}")
+        else:
+            # Es un producto unitario o búsqueda por nombre
+            print("Procesando como producto unitario o búsqueda por nombre")
+            self.agregar_producto()
+        
+        # Limpiar el campo de entrada después de procesar
+        self.product_input.clear()
+    
+    def agregar_producto_con_peso(self, producto, peso_kg):
+        """Agrega un producto con un peso específico leído del código de barras"""
+        id, codigo, nombre, precio_costo, precio_venta, margen_ganancia, venta_por_peso, disponible = producto[:8]
+        
+        # Verificar si hay suficiente stock disponible
+        if peso_kg > disponible:
+            QMessageBox.warning(self, "Error", f"No hay suficiente stock disponible para este producto. Disponible: {disponible:.3f}kg, Solicitado: {peso_kg:.3f}kg")
+            logging.error(f"No hay suficiente stock disponible. Disponible: {disponible:.3f}kg, Solicitado: {peso_kg:.3f}kg")
+            return
+        
+        # Desconectar la señal antes de modificar la tabla
+        self.table.itemChanged.disconnect(self.actualizar_cantidad_producto)
+        
+        # Calcular el precio total
+        precio_total = peso_kg * precio_venta
+        
+        # Añadir el producto a la tabla
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setItem(row, 0, QTableWidgetItem(codigo))
+        self.table.setItem(row, 1, QTableWidgetItem(nombre))
+        self.table.setItem(row, 2, QTableWidgetItem(f"{peso_kg:.3f}"))  # Mostrar el peso con 3 decimales
+        self.table.setItem(row, 3, QTableWidgetItem(f"${precio_total:.2f}"))
+        
+        self.table.item(row, 2).setFlags(Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        
+        # Agregar el producto al carrito
+        self.lista_productos.append((id, peso_kg, precio_total))
+        self.total += precio_total
+        self.actualizar_total()
+        
+        logging.info(f"Producto agregado por peso (código de barras): {nombre}, peso: {peso_kg:.3f}kg, precio: ${precio_total:.2f}")
+        
+        # Reconectar la señal después de modificar la tabla
+        self.table.itemChanged.connect(self.actualizar_cantidad_producto)
+    
     def agregar_producto(self):
         codigo_o_nombre = self.product_input.text().strip()
+        logging.debug(f"Intentando agregar producto: {codigo_o_nombre}")
+        
         producto = obtener_producto_por_codigo(codigo_o_nombre)
         
         if not producto:
             QMessageBox.warning(self, "Producto no encontrado", "No se encontró un producto con el código o nombre proporcionado.")
+            logging.warning("Producto no encontrado.")
+            return
+
+        # Asegúrate de que el producto tenga la cantidad esperada de elementos
+        if len(producto) < 8:
+            QMessageBox.warning(self, "Error", "El producto no tiene la información completa.")
+            logging.error("El producto no tiene la información completa.")
             return
 
         id, codigo, nombre, precio_costo, precio_venta, margen_ganancia, venta_por_peso, disponible = producto[:8]
 
-        # Comprobar si el producto ya está en la lista de productos agregados
-        for i, (prod_id, cantidad_existente, precio_total_existente) in enumerate(self.lista_productos):
-            if prod_id == id:
-                # Producto ya existe, entonces vamos a sumar la cantidad
-                if venta_por_peso == 1:
-                    # Producto vendido por peso
-                    dialog = CustomInputDialog(f"Ingrese el peso en kilogramos para {nombre}:")
-                    if dialog.exec() == QDialog.DialogCode.Accepted:
-                        try:
-                            peso = float(dialog.get_value())
-                            if peso <= 0:
-                                raise ValueError("Peso inválido")
-                            
-                            # Verificar si hay suficiente stock
-                            if (cantidad_existente + peso) > disponible:
-                                raise ValueError("No hay suficiente cantidad del producto")
-
-                            # Actualizar la cantidad y el precio total
-                            nueva_cantidad = cantidad_existente + peso
-                            nuevo_precio_total = nueva_cantidad * precio_venta
-                            
-                            # Actualizar en la tabla y en la lista de productos
-                            self.lista_productos[i] = (id, nueva_cantidad, nuevo_precio_total)
-                            self.table.item(i, 2).setText(str(nueva_cantidad))
-                            self.table.item(i, 3).setText(f"${nuevo_precio_total:.2f}")
-
-                            # Actualizar el total de la venta
-                            self.total += peso * precio_venta
-                            self.actualizar_total()
-                        except ValueError as e:
-                            QMessageBox.warning(self, "Valor inválido", str(e))
-                        return
-                    elif dialog.exec() == QDialog.DialogCode.Rejected:
-                        return
-                else:
-                    # Producto vendido por unidad
-                    dialog = CustomInputDialog(f"Ingrese la cantidad de unidades para {nombre}:")
-                    if dialog.exec() == QDialog.DialogCode.Accepted:
-                        try:
-                            cantidad = int(dialog.get_value())
-                            if cantidad <= 0:
-                                raise ValueError("Cantidad inválida")
-                            
-                            # Verificar si hay suficiente stock
-                            if (cantidad_existente + cantidad) > disponible:
-                                raise ValueError("No hay suficiente stock del producto")
-
-                            # Actualizar la cantidad y el precio total
-                            nueva_cantidad = cantidad_existente + cantidad
-                            nuevo_precio_total = nueva_cantidad * precio_venta
-
-                            # Actualizar en la tabla y en la lista de productos
-                            self.lista_productos[i] = (id, nueva_cantidad, nuevo_precio_total)
-                            self.table.item(i, 2).setText(str(nueva_cantidad))
-                            self.table.item(i, 3).setText(f"${nuevo_precio_total:.2f}")
-
-                            # Actualizar el total de la venta
-                            self.total += cantidad * precio_venta
-                            self.actualizar_total()
-                        except ValueError as e:
-                            QMessageBox.warning(self, "Valor inválido", str(e))
-                        return
-                    else:
-                        return
-
-        # Si el producto no estaba en la lista, se añade normalmente
-        if venta_por_peso == 1:
-            # Producto vendido por peso
+        # Verificar si hay suficiente stock disponible
+        if venta_por_peso == 0:  # Producto vendido por unidad
+            cantidad_a_vender = 1
+        else:
+            # Aquí se abre el diálogo para ingresar el peso
             dialog = CustomInputDialog(f"Ingrese el peso en kilogramos para {nombre}:")
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 try:
                     peso = float(dialog.get_value())
                     if peso <= 0:
-                        raise ValueError("Peso inválido")
+                        QMessageBox.warning(self, "Error", "Peso inválido")
+                        return
                     
-                    if peso > disponible:
-                        raise ValueError("No hay suficiente cantidad del producto")
-                    
-                    precio_total = peso * precio_venta
-                    cantidad = peso  # Guardar el peso como cantidad
+                    cantidad_a_vender = peso  # Guardar el peso como cantidad
+
                 except ValueError as e:
                     QMessageBox.warning(self, "Valor inválido", str(e))
+                    logging.error(f"Error al ingresar peso: {e}")
                     return
             else:
                 return
+        if cantidad_a_vender > disponible:
+            QMessageBox.warning(self, "Error", "No hay suficiente stock disponible para este producto.")
+            logging.error("No hay suficiente stock disponible.")
+            return
+
+        # Desconectar la señal antes de modificar la tabla
+        self.table.itemChanged.disconnect(self.actualizar_cantidad_producto)
+
+        # Si el producto se vende por unidad, agregar directamente con cantidad 1
+        if venta_por_peso == 0:  # 0 significa que se vende por unidad
+            # Comprobar si el producto ya está en la lista de productos agregados
+            for i, (prod_id, cantidad_existente, precio_total_existente) in enumerate(self.lista_productos):
+                if prod_id == id:
+                    # Producto ya existe, entonces vamos a sumar la cantidad
+                    nueva_cantidad = cantidad_existente + 1  # Aumentar la cantidad en 1
+                    nuevo_precio_total = nueva_cantidad * precio_venta
+                    
+                    # Actualizar en la tabla y en la lista de productos
+                    self.lista_productos[i] = (id, nueva_cantidad, nuevo_precio_total)
+                    self.table.item(i, 2).setText(str(nueva_cantidad))
+                    self.table.item(i, 3).setText(f"${nuevo_precio_total:.2f}")
+                    
+                    # Actualizar el total de la venta
+                    self.total += precio_venta
+                    self.actualizar_total()
+                    self.product_input.clear()  # Limpiar el campo de entrada
+                    logging.info(f"Producto actualizado: {nombre}, nueva cantidad: {nueva_cantidad}")
+                    
+                    # Reconectar la señal después de modificar la tabla
+                    self.table.itemChanged.connect(self.actualizar_cantidad_producto)
+                    return  # Salir del método para evitar duplicados
+
+            # Si el producto no estaba en la lista, se añade normalmente
+            cantidad = 1  # Asignar cantidad 1 directamente
+            precio_total = cantidad * precio_venta
+
+            # Añadir el nuevo producto a la tabla
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            self.table.setItem(row, 0, QTableWidgetItem(codigo))
+            self.table.setItem(row, 1, QTableWidgetItem(nombre))
+            self.table.setItem(row, 2, QTableWidgetItem(str(cantidad)))  # Editable
+            self.table.setItem(row, 3, QTableWidgetItem(f"${precio_total:.2f}"))
+            
+            self.table.item(row, 2).setFlags(Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsEnabled)
+
+            # Agregar el producto al carrito
+            self.lista_productos.append((id, cantidad, precio_total))
+            self.total += precio_total  # Solo sumar el precio total del nuevo producto
+            self.actualizar_total()
+            self.product_input.clear()  # Limpiar el campo de entrada
+            logging.info(f"Producto agregado: {nombre}, cantidad: {cantidad}")
         else:
-            # Producto vendido por unidad
-            dialog = CustomInputDialog(f"Ingrese la cantidad de unidades para {nombre}:")
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                try:
-                    cantidad = int(dialog.get_value())
-                    if cantidad <= 0:
-                        raise ValueError("Cantidad inválida")
-                    
-                    if cantidad > disponible:
-                        raise ValueError("No hay suficiente stock del producto")
-                    
-                    precio_total = cantidad * precio_venta
-                except ValueError as e:
-                    QMessageBox.warning(self, "Valor inválido", str(e))
-                    return
-            else:
-                return
+            # Si el producto se vende por peso, ya se maneja en la parte anterior
+            precio_total = cantidad_a_vender * precio_venta
 
-        # Añadir el nuevo producto a la tabla
-        row = self.table.rowCount()
-        self.table.insertRow(row)
-        self.table.setItem(row, 0, QTableWidgetItem(codigo))
-        self.table.setItem(row, 1, QTableWidgetItem(nombre))
-        self.table.setItem(row, 2, QTableWidgetItem(str(cantidad)))  # Editable
-        self.table.setItem(row, 3, QTableWidgetItem(f"${precio_total:.2f}"))
-        
-        self.table.item(row, 2).setFlags(Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsEnabled)
+            # Añadir el nuevo producto a la tabla
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            self.table.setItem(row, 0, QTableWidgetItem(codigo))
+            self.table.setItem(row, 1, QTableWidgetItem(nombre))
+            self.table.setItem(row, 2, QTableWidgetItem(str(cantidad_a_vender)))  # Editable
+            self.table.setItem(row, 3, QTableWidgetItem(f"${precio_total:.2f}"))
+            
+            self.table.item(row, 2).setFlags(Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsEnabled)
 
-        # Agregar el producto al carrito
-        self.lista_productos.append((id, cantidad, precio_total))
-        self.total += precio_total
-        self.actualizar_total()
-        self.product_input.clear()
+            # Agregar el producto al carrito
+            self.lista_productos.append((id, cantidad_a_vender, precio_total))
+            self.total += precio_total  # Solo sumar el precio total del nuevo producto
+            self.actualizar_total()
+            self.product_input.clear()  # Limpiar el campo de entrada
+            logging.info(f"Producto agregado por peso: {nombre}, cantidad: {cantidad_a_vender}")
 
+        # Reconectar la señal después de modificar la tabla
+        self.table.itemChanged.connect(self.actualizar_cantidad_producto)
+    
     def actualizar_cantidad_producto(self, item: QTableWidgetItem):
         # Verifica si el cambio ocurre en la columna "Cantidad" (columna 2)
         if item.column() == 2:
@@ -318,37 +399,34 @@ class VentasTab(QWidget):
                 row = item.row()
 
                 # Validar si la fila corresponde a un índice válido en lista_productos
-                if row >= len(self.lista_productos) or self.lista_productos[row] is None:
+                if row < 0 or row >= len(self.lista_productos):
+                    logging.error("Índice de fila fuera de rango al actualizar cantidad.")
+                    self.product_input.clear()
                     return
 
                 # Obtener detalles del producto desde la lista
                 producto_id, cantidad_anterior, precio_total_anterior = self.lista_productos[row]
-                producto = obtener_producto_por_id(producto_id)  # Recuperar detalles del producto
-                venta_por_peso = producto[7]  # Índice de venta_por_peso
-                stock_disponible = producto[8]  # Índice de stock disponible
-
-                # Obtener la nueva cantidad ingresada y validar el tipo de dato
-                nueva_cantidad = item.text().strip()
-                if venta_por_peso == 1:
-                    # Producto vendido por peso, debe ser un número real
-                    nueva_cantidad = float(nueva_cantidad)
-                else:
-                    # Producto vendido por unidad, debe ser un número entero
-                    nueva_cantidad = int(nueva_cantidad)
+                nueva_cantidad = int(item.text().strip())  # Asegúrate de que sea un entero
 
                 if nueva_cantidad <= 0:
-                    raise ValueError("La cantidad debe ser mayor a 0.")
+                    QMessageBox.warning(self, "Error", "La cantidad debe ser mayor a 0.")
+                    return
 
                 # Verificar stock disponible
+                cursor = sqlite3.connect(get_db_path()).cursor()
+                cursor.execute('SELECT disponible FROM productos WHERE id = ?', (producto_id,))
+                stock_disponible = cursor.fetchone()[0]
+
                 if nueva_cantidad > stock_disponible:
-                    raise ValueError("No hay suficiente stock disponible.")
+                    QMessageBox.warning(self, "Stock Insuficiente", f"No hay suficiente stock para el producto. Disponible: {int(stock_disponible)}, Solicitado: {nueva_cantidad}.")
+                    # Restaurar el valor anterior en la celda
+                    self.table.item(row, 2).setText(str(cantidad_anterior))  # Columna 2: Cantidad
+                    item.setText(str(cantidad_anterior))  # Restaurar el valor en el QTableWidgetItem
+                    return
 
                 # Calcular precio unitario y nuevo precio total
                 precio_unitario = precio_total_anterior / cantidad_anterior
                 nuevo_precio_total = nueva_cantidad * precio_unitario
-
-                # Bloquear señales para evitar loops recursivos
-                self.table.blockSignals(True)
 
                 # Actualizar la lista de productos
                 self.lista_productos[row] = (producto_id, nueva_cantidad, nuevo_precio_total)
@@ -360,20 +438,18 @@ class VentasTab(QWidget):
                 self.total = sum(p[2] for p in self.lista_productos)
                 self.actualizar_total()
 
-                # Desbloquear señales
-                self.table.blockSignals(False)
-
             except ValueError as e:
                 QMessageBox.warning(self, "Cantidad inválida", str(e))
-
-                # Restaurar el valor anterior en caso de error
-                self.table.blockSignals(True)
-                cantidad_anterior = self.lista_productos[row][1]
-                item.setText(str(cantidad_anterior))
-                self.table.blockSignals(False)
+                logging.error(f"Error al actualizar cantidad: {e}")
+                # Restaurar el valor anterior en la celda
+                self.table.item(row, 2).setText(str(cantidad_anterior))  # Columna 2: Cantidad
+                item.setText(str(cantidad_anterior))  # Restaurar el valor en el QTableWidgetItem
 
             except IndexError as e:
-                QMessageBox.warning(self, "Error", str(e))
+                logging.error(f"Error de índice: {e}")
+                # Actualizar el total general
+                self.total = sum(p[2] for p in self.lista_productos)
+                self.actualizar_total()
 
 
     def quitar_producto_venta(self):
@@ -392,7 +468,7 @@ class VentasTab(QWidget):
     
     def actualizar_total(self):
         self.total_label.setText(f"Total: ${self.total:.2f}")
-
+        
     def calcular_vuelto(self):
         try:
             monto_pagado = float(self.amount_paid.text())
@@ -415,7 +491,8 @@ class VentasTab(QWidget):
         self.amount_paid.clear()
         self.change_label.setText("Vuelto: $0.00")
         self.inicializar_completers()
-
+        self.payment_method.setCurrentIndex(0)  # Selecciona el primer elemento ("Efectivo")
+    
     def registrar_venta(self):
         # Verificar si se han añadido productos
         if not self.lista_productos:
@@ -437,8 +514,6 @@ class VentasTab(QWidget):
 
             if exito:
                 QMessageBox.information(self, "Venta registrada", "La venta a crédito se ha registrado correctamente.")
-                
-                # Limpiar los datos de la venta
                 self.limpiar_datos_venta()
             else:
                 QMessageBox.warning(self, "Error", "No se pudo registrar la venta a crédito.")
@@ -463,6 +538,7 @@ class VentasTab(QWidget):
             exito, venta_id = registrar_venta(self.lista_productos, self.total, metodo_pago)
 
             if exito:
+
                 mensaje = QMessageBox(self)
                 mensaje.setWindowTitle("Imprimir ticket")
                 mensaje.setText("Desea imprimir el ticket?")
@@ -481,9 +557,30 @@ class VentasTab(QWidget):
                 # Verificar cuál botón fue presionado
                 if mensaje.clickedButton() == btn_si:
                     # Generar el ticket
-                    self.generar_ticket(venta_id, self.lista_productos, self.total, metodo_pago, vuelto, monto_pagado)
-                            
+                    ruta_ticket = self.generar_ticket(venta_id, self.lista_productos, self.total, metodo_pago, vuelto, monto_pagado)
+                    if ruta_ticket:
+                        if self.imprimir_ticket(ruta_ticket):
+                            QMessageBox.information(self, "Ticket impreso", "El ticket se ha impreso correctamente.")
+                        else:
+                            QMessageBox.information(self, "Error", "No se pudo imprimir el ticket.")
+                                
                 QMessageBox.information(self, "Venta registrada", "La venta se ha registrado correctamente.")
+                
+                # Verificar stock restante
+                for producto_id, cantidad, _ in self.lista_productos:
+                    cursor = sqlite3.connect(get_db_path()).cursor()
+                    cursor.execute('SELECT disponible, nombre FROM productos WHERE id = ?', (producto_id,))
+                    resultado = cursor.fetchone()  # Obtener el resultado de la consulta
+
+                    if resultado is None:
+                        logging.error(f"Producto no encontrado.")
+                        continue  # Si no se encuentra el producto, continuar con el siguiente
+
+                    stock_restante, nombre = resultado  # Desempaquetar el resultado
+
+                    if stock_restante <= 5:
+                        QMessageBox.warning(self, "Alerta de Stock Bajo", f"El stock del producto {nombre} es bajo. Restante: {int(stock_restante)}.")
+                
                 self.limpiar_datos_venta()
             else:
                 QMessageBox.warning(self, "Error", "No se pudo registrar la venta.")
@@ -498,15 +595,17 @@ class VentasTab(QWidget):
         # Nombre y ruta del archivo PDF
         nombre_archivo = f"ticket_{venta_id}.pdf"
         ruta_ticket = os.path.join(directorio_tickets, nombre_archivo)
+        ruta_ticket_absoluta = os.path.abspath(ruta_ticket)  # Obtener la ruta absoluta
         fecha_actual = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        print(ruta_ticket)
 
         # Márgenes y ancho útil
         MARGEN_HORIZONTAL = 10
-        ANCHO_TICKET = 58 * mm
+        ANCHO_TICKET = 50 * mm
         ANCHO_UTIL = ANCHO_TICKET - (2 * MARGEN_HORIZONTAL)
 
         # Calcular el número de líneas necesario
-        lineas = 10  # Encabezado, separadores y detalles finales
+        lineas = 13 # Encabezado, separadores y detalles finales
         for producto_id, cantidad, precio_total in lista_productos:
             producto = obtener_producto_por_id(producto_id)
             if producto is None:
@@ -528,15 +627,15 @@ class VentasTab(QWidget):
             lineas += 2  # Líneas extra para "Vuelto" y "Pago"
 
         # Tamaño de cada línea (10 puntos) y margen adicional
-        ALTURA_TICKET = (lineas * 10) + 30
+        ALTURA_TICKET = (lineas * 10) + 20
 
         # Crear el canvas con altura dinámica
         pdf = canvas.Canvas(ruta_ticket, pagesize=(ANCHO_TICKET, ALTURA_TICKET))
 
         # Configuración inicial del ticket
-        y_position = ALTURA_TICKET - 20  # Margen superior
+        y_position = ALTURA_TICKET - 10  # Margen superior
         pdf.setFont("Helvetica-Bold", 10)
-        pdf.drawCentredString(ANCHO_TICKET / 2, y_position, "Kiosco 25")
+        pdf.drawCentredString(ANCHO_TICKET / 2, y_position, "KIOSCO 25")
         y_position -= 10
 
         pdf.setFont("Helvetica", 8)
@@ -576,27 +675,47 @@ class VentasTab(QWidget):
         pdf.drawString(MARGEN_HORIZONTAL, y_position, f"Método de pago: {metodo_pago}")
         y_position -= 10
         pdf.drawString(MARGEN_HORIZONTAL, y_position, f"Total: ${total:.2f}")
-        y_position -= 10
 
         if metodo_pago == "Efectivo":
+            y_position -= 10
             pdf.drawString(MARGEN_HORIZONTAL, y_position, f"Su pago: ${monto_pagado:.2f}")
             y_position -= 10
             pdf.drawString(MARGEN_HORIZONTAL, y_position, f"Vuelto: ${vuelto:.2f}")
-            y_position -= 10
-
+            y_position -= 15
+        else:
+            y_position -=15
+            
+        pdf.setFont("Helvetica-Bold", 8)
         pdf.drawCentredString(ANCHO_TICKET / 2, y_position, "Gracias por su compra")
         y_position -= 10
+        pdf.setFont("Helvetica", 8)
+        pdf.drawCentredString(ANCHO_TICKET / 2, y_position, "=" * 30)
         pdf.setFont("Helvetica-Oblique", 8)
+        y_position -= 10
         pdf.drawCentredString(ANCHO_TICKET / 2, y_position, "*NO VÁLIDO COMO FACTURA*")
+        y_position -= 10
+        pdf.setFont("Helvetica", 8)
+        pdf.drawCentredString(ANCHO_TICKET / 2, y_position, "=" * 30)
+        y_position -= 10
 
         # Guardar el archivo PDF
         pdf.save()
-
-        # Mensaje de confirmación
+                        
         QMessageBox.information(self, "Ticket Generado", f"El ticket de venta ha sido guardado en {ruta_ticket}")
 
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Return:
-            term = self.product_input.text().strip()
-            if term:
-                self.agregar_producto()
+        return ruta_ticket_absoluta  # Retornar la ruta absoluta    
+        
+
+    def imprimir_ticket(self, ruta_ticket):
+        # Imprimir el ticket usando la impresora predeterminada
+        try:
+            if os.path.exists(ruta_ticket):  # Verificar que el archivo existe
+                win32api.ShellExecute(0, "print", ruta_ticket, None, ".", 0)
+                return True  # Impresión exitosa
+            else:
+                QMessageBox.warning(self, "Error", "El archivo del ticket no existe.")
+                return False  # Archivo no encontrado
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"No se pudo imprimir el ticket: {e}")
+            return False  # Error en la impresión
+    

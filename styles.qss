@@ -5,6 +5,7 @@
 .QInputDialog{
     font-size: 16;
 }
+
 /* Estilos para el input del QInputDialog */
 .QInputDialog .QLineEdit {
     font-size: 20px;  /* Aumenta el tamaño de la fuente */
@@ -57,27 +58,36 @@
     font-size: 16px;
 }
 
-#addButton, #updateButton, #deleteButton, #quitarProducto, #registrarVenta, #botonRecaudacionDiaria, #botonRecaudacionPeriodo, #clienteButton, #pagoButton {
+#addButton, #updateButton, #deleteButton, #quitarProducto, #registrarVenta, #botonRecaudacionDiaria, #botonRecaudacionPeriodo, #clienteButton, #registrarPago, #modificarUsuario, #eliminarUsuario {
     padding: 10px;
     color: white;
     border: none;
     border-radius: 5px;
     font-size: 18px;
 }
-#addButton, #registrarVenta, #clienteButton, #pagoButton {
+#addButton, #registrarVenta, #clienteButton, #registrarPago {
     background-color: green;
 }
-#deleteButton, #quitarProducto {
+#deleteButton, #quitarProducto, #eliminarUsuario {
     background-color: red;
 }
-#updateButton {
+
+#deleteButton:hover, #quitarProducto:hover, #eliminarUsuario:hover {
+    background-color: rgb(180, 3, 3);
+}
+
+#updateButton, #modificarUsuario {
     background-color: blue;
 }
 #botonRecaudacionDiaria, #botonRecaudacionPeriodo {
     background-color: #1404f8;
 }
 
-#addButton:hover, #updateButton:hover, #deleteButton:hover, #botonRecaudacionDiaria::hover, #botonRecaudacionPeriodo::hover, #clienteButton::hover {
+#addButton:hover, #clienteButton::hover, #registrarPago {
+    background-color: rgb(74, 245, 74);
+}
+
+#updateButton:hover, #botonRecaudacionDiara::hover, #botonRecaudacionPeriodo::hover, #modificarUsuario:hover {
     background-color: #0056b3;
 }
 
@@ -86,4 +96,263 @@
 }
 #total {
     padding: 30px;
+}
+
+/* Estilos para la barra superior */
+#barraSuperior {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+    min-height: 50px;
+    padding: 5px;
+}
+
+#containerUsuario {
+    background-color: #ffffff;
+    border: 1px solid #dee2e6;
+    border-radius: 20px;
+    padding: 10px 5px;
+    max-width: 200px;
+}
+
+#iconoUsuario {
+    font-size: 16px;
+    margin-right: 0;
+}
+
+#etiquetaUsuario {
+    color: #495057;
+    font-size: 14px;
+    font-weight: 600;
+}
+#botonSincronizar {
+    background-color: transparent;
+    color: blue;
+    border: none;
+    border-radius: 15px;
+    min-width: 30px;
+    max-width: 200px;
+    min-height: 30px;
+    max-height: 30px;
+    font-size: 20px;
+    margin: 5px 10px;
+}
+
+#botonSincronizar:hover {
+    background-color: blue;
+    color: white;
+}
+#botonDesconectar {
+    background-color: transparent;
+    color: #dc3545;
+    border: none;
+    border-radius: 15px;
+    min-width: 30px;
+    max-width: 200px;
+    min-height: 30px;
+    max-height: 30px;
+    font-size: 20px;
+    margin: 5px 10px;
+}
+
+#botonDesconectar:hover {
+    background-color: #dc3545;
+    color: white;
+}
+
+#botonDesconectar:focus, #agregarUsuarioCompacto:focus, #actualizarModificaciones:focus, #actualizarUsuarios:focus, #botonRecaudacionDiaria:focus, #botonRecaudacionPeriodo:focus, #eliminarUsuario:focus, #addButton:focus, #deleteButton:focus, #updateButton:focus, #agregarClienteCompacto:focus {
+    outline: none;
+}
+
+/* Estilo para el botón compacto de agregar usuario */
+#agregarUsuarioCompacto {
+    background-color: green;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    padding: 8px 16px;
+    font-size: 16px;
+    max-width: 150px;  /* Limitar el ancho del botón */
+    margin: 5px;
+}
+
+#agregarUsuarioCompacto:hover {
+    background-color: #45a049;
+}
+
+/* Contenedor del botón */
+#contenedorBotonUsuario {
+    background-color: transparent;
+    margin: 5px 15px;  /* Margen para separarlo del borde */
+}
+
+#actualizarUsuarios, #actualizarModificaciones {
+    background-color: blue;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    padding: 8px 16px;
+    font-size: 16px;
+    max-width: 150px;  /* Limitar el ancho del botón */
+    margin: 5px;
+}
+
+#actualizarUsuarios:hover, #actualizarModificaciones:hover {
+    background-color:rgb(52, 81, 211)
+}
+
+/* Estilo para el botón compacto de agregar cliente */
+#agregarClienteCompacto {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    padding: 8px 16px;
+    font-size: 14px;
+    max-width: 150px;
+    margin: 5px;
+}
+
+#agregarClienteCompacto:hover {
+    background-color: #45a049;
+}
+
+/* Contenedor del botón de cliente */
+#contenedorBotonCliente {
+    background-color: transparent;
+    margin: 5px 15px;
+}
+
+/* Estilos para el logo en la barra superior */
+#containerLogo {
+    padding: 5px;
+    margin: 0 20px;  /* Margen horizontal */
+}
+
+#logoBarraSuperior {
+    min-height: 40px;
+    max-height: 40px;
+    margin: 0 auto;  /* Centrar horizontalmente */
+}
+
+/* Contenedor de botones */
+#botonesContainer {
+    margin-left: 10px;
+}
+
+/* Estilos para la pestaña de etiquetas */
+#etiquetas {
+    background-color: #ffffff;
+}
+
+#panelFormulario {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 15px;
+    margin: 10px;
+}
+
+#panelPreview {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 15px;
+    margin: 10px;
+}
+
+#scrollPreview {
+    background-color: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 5px;
+}
+
+#labelPreview {
+    background-color: #ffffff;
+    border: 1px dashed #cccccc;
+    margin: 10px;
+    border-radius: 10px; /* Añadir bordes redondeados a la vista previa */
+}
+
+/* Estilo para el input de peso en etiquetas */
+#peso_input {
+    font-size: 20px;
+    padding: 8px;
+    border: 2px solid #cccccc;
+    border-radius: 8px;
+    min-height: 20px;
+}
+
+QDoubleSpinBox#peso_input::up-button, QDoubleSpinBox#peso_input::down-button {
+    width: 25px;
+    height: 20px;
+}
+    
+QDoubleSpinBox#peso_input::up-arrow, QDoubleSpinBox#peso_input::down-arrow {
+    width: 12px;
+    height: 12px;
+}
+
+#peso_input:focus {
+    border: 2px solid #4CAF50;
+}
+
+/* Estilo para las etiquetas generadas */
+.etiqueta_generada {
+    border-radius: 15px;
+    overflow: hidden;
+}
+
+#tituloSeccion {
+    font-size: 24px;
+    font-weight: bold;
+    color: #333333;
+    margin: 10px 0;
+}
+
+/* Botones específicos para la pestaña de etiquetas */
+#btn_generar_preview, #btn_guardar_preview, #btn_imprimir, #btn_seleccionar_plantilla, #btn_guardar_pdf {
+    padding: 8px 15px;
+    border-radius: 5px;
+    font-size: 16px;
+    margin: 5px;
+}
+
+#btn_generar_preview:focus, #btn_guardar_preview:focus, #btn_imprimir:focus, #btn_seleccionar_plantilla:focus, #btn_guardar_pdf:focus {
+    outline:none
+}
+
+#btn_generar_preview {
+    background-color: #007bff;
+    color: white;
+}
+
+#btn_generar_preview:hover {
+    background-color: #0056b3;
+}
+
+#btn_guardar_preview, #btn_guardar_pdf {
+    background-color: #28a745;
+    color: white;
+}
+
+#btn_guardar_preview:hover, #btn_guardar_pdf:hover {
+    background-color: #218838;
+}
+
+#btn_imprimir {
+    background-color: #17a2b8;
+    color: white;
+}
+
+#btn_imprimir:hover {
+    background-color: #138496;
+}
+
+#btn_seleccionar_plantilla {
+    background-color: #6c757d;
+    color: white;
+}
+
+#btn_seleccionar_plantilla:hover {
+    background-color: #5a6268;
 }

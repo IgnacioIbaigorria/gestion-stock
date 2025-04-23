@@ -1,11 +1,56 @@
-from PyQt6.QtWidgets import QWidget, QToolTip, QMessageBox, QVBoxLayout, QHeaderView, QLabel, QDateEdit, QPushButton, QTableWidget, QTableWidgetItem, QHBoxLayout
-from PyQt6.QtCore import QDate
-from datetime import date
-from db import obtener_ventas_por_dia, obtener_ventas_por_periodo
+from PyQt6.QtWidgets import QWidget, QDialog, QToolTip, QAbstractItemView, QMessageBox, QVBoxLayout, QHeaderView, QLabel, QDateEdit, QPushButton, QTableWidget, QTableWidgetItem, QHBoxLayout, QLineEdit
+from PyQt6.QtCore import QDate, Qt, QTimer
+from PyQt6.QtGui import QMovie  # Add this import
+from datetime import date, datetime
+from db_postgres import obtener_total_ventas_efectivo, obtener_ventas_por_dia, obtener_ventas_por_periodo
 
+class LoadingOverlay(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # Create semi-transparent background
+        self.setStyleSheet("""
+            QWidget {
+                background-color: rgba(255, 255, 255, 0.7);
+                border-radius: 10px;
+            }
+        """)
+        
+        layout = QVBoxLayout(self)
+        
+        # Create loading spinner
+        self.spinner_label = QLabel()
+        self.spinner_movie = QMovie("spinner.gif")
+        self.spinner_label.setMovie(self.spinner_movie)
+        self.spinner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Add loading text
+        self.text_label = QLabel("Cargando...")
+        self.text_label.setStyleSheet("""
+            QLabel {
+                color: #333;
+                font-size: 16px;
+                background-color: transparent;
+            }
+        """)
+        self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        layout.addWidget(self.spinner_label)
+        layout.addWidget(self.text_label)
+        self.hide()
+
+    def showEvent(self, event):
+        # Position overlay over the table
+        if self.parent():
+            self.setGeometry(self.parent().geometry())
+        self.spinner_movie.start()
+
+    def hideEvent(self, event):
+        self.spinner_movie.stop()
+        
 class CajaTab(QWidget):
     def __init__(self):
         super().__init__()
+        self.loading = LoadingOverlay(self)
 
         # Layout principal
         layout = QVBoxLayout()
@@ -55,11 +100,15 @@ class CajaTab(QWidget):
         layout.addWidget(self.period_profit_label)
         layout.addLayout(period_layout)
 
+
         # Tabla para mostrar el detalle de ventas
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Fecha", "Monto Total", "Método de Pago", "Detalle"])
+        self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.loading = LoadingOverlay(self.table)
         layout.addWidget(self.table)
 
         # Conectar la señal de clic para abrir el detalle en una ventana
@@ -71,37 +120,55 @@ class CajaTab(QWidget):
         self.setLayout(layout)
 
     def calcular_recaudacion_diaria(self):
+        self.loading.show()
+        self.table.setRowCount(0)  # Clear table
+        self.daily_revenue_label.setText("Recaudación del día: Cargando...")
+        self.daily_profit_label.setText("Ganancia del día: Cargando...")
+        
+        # Use QTimer to allow the UI to update before processing
+        QTimer.singleShot(100, self._procesar_recaudacion_diaria)
+
+    def _procesar_recaudacion_diaria(self):
         fecha = self.daily_date.date().toString("yyyy-MM-dd")
         ventas = obtener_ventas_por_dia(fecha)
         
-        # Calcular la recaudación total y la ganancia total
-        total = sum(venta[1] for venta in ventas)  # Suma de monto_total
-        ganancia_total = sum(venta[4] for venta in ventas)  # Suma de ganancias
-        self.daily_revenue_label.setText(f"Recaudación del día: ${total:.2f}")
+        total_ventas = sum(venta[1] for venta in ventas)
+        ganancia_total = sum(venta[4] for venta in ventas)
+        total_efectivo = obtener_total_ventas_efectivo(fecha)
+
+        self.daily_revenue_label.setText(f"Recaudación del día: ${total_ventas:.2f}")
         self.daily_profit_label.setText(f"Ganancia del día: ${ganancia_total:.2f}")
         self.period_revenue_label.setText(f"Recaudación por período: ")
         self.period_profit_label.setText(f"Ganancia por período: ")
         
-        # Mostrar las ventas en la tabla
         self.mostrar_ventas(ventas)
+        self.loading.hide()
 
     def calcular_recaudacion_periodo(self):
+        self.loading.show()
+        self.table.setRowCount(0)  # Clear table
+        self.period_revenue_label.setText("Recaudación por período: Cargando...")
+        self.period_profit_label.setText("Ganancia por período: Cargando...")
+        
+        # Use QTimer to allow the UI to update before processing
+        QTimer.singleShot(100, self._procesar_recaudacion_periodo)
+
+    def _procesar_recaudacion_periodo(self):
         fecha_inicio = self.start_date.date().toString("yyyy-MM-dd")
         fecha_fin = self.end_date.date().toString("yyyy-MM-dd")
         ventas = obtener_ventas_por_periodo(fecha_inicio, fecha_fin)
 
-        # Calcular la recaudación total y la ganancia total
-        total = sum(venta[1] for venta in ventas)  # Suma de monto_total
-        ganancia_total = sum(venta[4] for venta in ventas)  # Suma de ganancias
+        total = sum(venta[1] for venta in ventas)
+        ganancia_total = sum(venta[4] for venta in ventas)
+        
         self.period_revenue_label.setText(f"Recaudación por período: ${total:.2f}")
         self.period_profit_label.setText(f"Ganancia por período: ${ganancia_total:.2f}")
         self.daily_revenue_label.setText(f"Recaudación del día: ")
         self.daily_profit_label.setText(f"Ganancia del día: ")
 
-        
-        # Mostrar las ventas en la tabla
         self.mostrar_ventas(ventas)
-
+        self.loading.hide()
+        
     def mostrar_ventas(self, ventas):
         self.table.setRowCount(0)
         for venta in ventas:
@@ -117,7 +184,7 @@ class CajaTab(QWidget):
                 # Procesar los detalles de la venta
                 detalle_texto = "\n".join([
                     f"{nombre} - {cantidad:.2f}kg x ${precio_venta}/kg" if isinstance(cantidad, float) and not cantidad.is_integer() 
-                    else f"{nombre} - {int(cantidad)} x ${precio_venta}"
+                    else f"{nombre} - {(cantidad)} x ${precio_venta}"
                     for nombre, cantidad, _, precio_venta in detalle
                 ])
 
@@ -125,6 +192,7 @@ class CajaTab(QWidget):
             self.table.setItem(row, 1, QTableWidgetItem(f"${monto_total:.2f}"))
             self.table.setItem(row, 2, QTableWidgetItem(metodo_pago))
             self.table.setItem(row, 3, QTableWidgetItem(detalle_texto))
+            
     def mostrar_tooltip_detalle(self, row, column):
         # Solo mostrar el tooltip si estamos en la columna de detalles
         if column == 3:
@@ -142,3 +210,4 @@ class CajaTab(QWidget):
                 mensaje.setWindowTitle("Detalle Completo")
                 mensaje.setText(item.text())
                 mensaje.exec()
+

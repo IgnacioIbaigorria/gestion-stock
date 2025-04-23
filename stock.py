@@ -8,9 +8,9 @@ import uuid
 import win32api
 import json
 from PyQt6.QtWidgets import (QApplication, QComboBox, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, QPushButton, QLabel,
-                             QTableWidget, QInputDialog, QDialog, QTableWidgetItem, QStyleFactory, QHeaderView, QMessageBox, QSpinBox, QDoubleSpinBox, QDateEdit, QCompleter, QTabWidget)
+                             QTableWidget, QDialog, QTableWidgetItem, QStyleFactory, QHeaderView, QMessageBox, QSpinBox, QDoubleSpinBox, QDateEdit, QCompleter, QTabWidget)
 from PyQt6.QtCore import Qt, QDate, QStringListModel
-from PyQt6.QtGui import QFont, QIcon, QStandardItem
+from PyQt6.QtGui import QFont, QIcon
 import sqlite3
 import datetime
 from datetime import date

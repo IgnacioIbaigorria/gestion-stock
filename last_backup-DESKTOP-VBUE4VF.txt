@@ -1,0 +1,1 @@
+ERROR: Error creando el backup: [WinError 5] Acceso denegado: 'C:\\Users\\Backups' - 2025-03-12 01:43:32

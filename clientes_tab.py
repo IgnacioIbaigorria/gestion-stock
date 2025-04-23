@@ -1,100 +1,178 @@
-from datetime import datetime
-from PyQt6.QtWidgets import (QWidget, QHeaderView, QScrollArea, QToolTip, QVBoxLayout, QLineEdit, QPushButton, QLabel, QHBoxLayout, QTableWidget, QTableWidgetItem, QComboBox, QMessageBox)
-from PyQt6.QtCore import QDate
-from signals import signals
-from db import agregar_cliente_a_db, obtener_clientes, obtener_detalle_ventas_deudas, obtener_deudas_cliente, obtener_pagos_cliente, registrar_pago_cliente
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QLabel,
+    QTableWidget, QTableWidgetItem, QScrollArea, QComboBox, QMessageBox,
+    QHeaderView, QSpacerItem, QSizePolicy, QDialog, QAbstractItemView
 
+)
+from PyQt6.QtCore import Qt
+from datetime import datetime
+from db_postgres import (
+    agregar_cliente_a_db, obtener_clientes, obtener_detalle_ventas_deudas,
+    obtener_deudas_cliente, obtener_pagos_cliente, registrar_pago_cliente
+)
+from signals import signals
+
+class DetalleDeudaDialog(QDialog):
+    def __init__(self, deuda, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Detalle de Deuda")
+        self.setGeometry(100, 100, 400, 300)
+
+        layout = QVBoxLayout()
+
+        # Mostrar información de la deuda
+        layout.addWidget(QLabel(f"Fecha: {deuda['fecha']}"))
+        layout.addWidget(QLabel(f"Total: ${deuda['monto_total']:.2f}"))
+        layout.addWidget(QLabel(f"Pagado: ${deuda['monto_pagado']:.2f}"))
+        layout.addWidget(QLabel(f"Deuda: ${deuda['monto']:.2f}"))
+        layout.addWidget(QLabel(f"Detalle: {deuda['detalle']}"))
+        close_button = QPushButton("Cerrar")
+        close_button.clicked.connect(self.close)
+        layout.addWidget(close_button)
+                
+        self.setLayout(layout)
+                
 class ClientesTab(QWidget):
     def __init__(self):
         super().__init__()
 
         # Layout principal
-        layout = QVBoxLayout()
+        main_layout = QVBoxLayout()
 
-        # Formulario para agregar cliente
-        form_layout = QVBoxLayout()
-        form_layout.addWidget(QLabel("Agregar cliente"))
+        # Sección: Agregar Cliente con layout horizontal
+        add_client_layout = QVBoxLayout()
+        add_client_layout.addWidget(QLabel("<b>Agregar Cliente</b>"))
 
+        # Crear un layout horizontal para el input y el botón
+        input_button_layout = QHBoxLayout()
+        
+        # Input del cliente
         self.client_name_input = QLineEdit()
         self.client_name_input.setPlaceholderText("Nombre del cliente")
-        form_layout.addWidget(self.client_name_input)
+        input_button_layout.addWidget(self.client_name_input)
 
-        self.add_client_button = QPushButton("Agregar Cliente")
-        self.add_client_button.setObjectName("clienteButton")
+        # Contenedor para el botón
+        btn_container = QWidget()
+        btn_container.setObjectName("contenedorBotonCliente")
+        btn_container_layout = QHBoxLayout()
+        btn_container_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Botón de agregar
+        self.add_client_button = QPushButton("+ Nuevo Cliente")
+        self.add_client_button.setObjectName("agregarClienteCompacto")
         self.add_client_button.clicked.connect(self.agregar_cliente)
-        form_layout.addWidget(self.add_client_button)
-
-        layout.addLayout(form_layout)
-
-        # Selector de clientes
-        selector_layout = QHBoxLayout()
-        selector_layout.addWidget(QLabel("Seleccionar Cliente:"))
-        self.client_selector = QComboBox()
-        self.client_selector.currentIndexChanged.connect(self.mostrar_deuda_cliente)
-        self.client_selector.currentIndexChanged.connect(self.cargar_datos_cliente)
-        selector_layout.addWidget(self.client_selector)
-
-        layout.addLayout(selector_layout)
+        btn_container_layout.addWidget(self.add_client_button)
         
-        # Etiqueta para mostrar la deuda total
-        deuda_pago_layout = QHBoxLayout()
+        btn_container.setLayout(btn_container_layout)
+        input_button_layout.addWidget(btn_container)
+
+        # Agregar el layout horizontal al layout principal
+        add_client_layout.addLayout(input_button_layout)
+        main_layout.addLayout(add_client_layout)
+        main_layout.addSpacing(10)
+
+        # Sección: Seleccionar Cliente
+        client_selection_layout = QHBoxLayout()
+        client_selection_layout.addWidget(QLabel("<b>Seleccionar Cliente:</b>"))
+        signals.cliente_agregado.connect(self.cargar_clientes)
+
+
+        self.client_selector = QComboBox()
+        self.client_selector.currentIndexChanged.connect(self.cargar_datos_cliente)
+        client_selection_layout.addWidget(self.client_selector)
+
+        main_layout.addLayout(client_selection_layout)
+        main_layout.addSpacing(10)
+
+        # Sección: Información de Deudas y Pagos
+        info_layout = QVBoxLayout()
+
+        # Etiqueta de deuda total
         self.total_debt_label = QLabel("Deuda Total: $0.00")
         self.total_debt_label.setStyleSheet("font-weight: bold; color: red;")
-        self.total_debt_label.hide()  # Ocultar inicialmente
-        deuda_pago_layout.addWidget(self.total_debt_label)
-        
+        self.total_debt_label.hide()
+        info_layout.addWidget(self.total_debt_label)
+
+        # Registro de pago
+        payment_layout = QHBoxLayout()
         self.client_pay_input = QLineEdit()
         self.client_pay_input.setPlaceholderText("Ingrese el pago")
         self.client_pay_input.hide()
-        deuda_pago_layout.addWidget(self.client_pay_input)
-        
-        layout.addLayout(deuda_pago_layout)
+        payment_layout.addWidget(self.client_pay_input)
 
-        self.register_pay_button = QPushButton("Registrar pago")
-        self.register_pay_button.setObjectName("pagoButton")
+        self.register_pay_button = QPushButton("Registrar Pago")
+        self.register_pay_button.setObjectName("registrarPago")
         self.register_pay_button.clicked.connect(self.registrar_pago)
         self.register_pay_button.hide()
-        layout.addWidget(self.register_pay_button)
+        payment_layout.addWidget(self.register_pay_button)
 
+        info_layout.addLayout(payment_layout)
+        main_layout.addLayout(info_layout)
+        main_layout.addSpacing(10)
 
-
-        # Crear un área desplazable para las tablas
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)  # Ajustar contenido al tamaño disponible
-
-        # Widget contenedor dentro del área desplazable
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
+        # Área de tablas: Deudas y Pagos
+        tables_layout = QHBoxLayout()
 
         # Tabla de deudas
-        scroll_layout.addWidget(QLabel("Deudas del Cliente:"))
-        self.debt_table = QTableWidget(0, 3)
-        self.debt_table.setHorizontalHeaderLabels(["Fecha", "Monto", "Detalle"])
-        self.debt_table.horizontalHeader().setStretchLastSection(True)
+        debt_layout = QVBoxLayout()
+        debt_layout.addWidget(QLabel("<b>Deudas del Cliente</b>"))
+        self.debt_table = QTableWidget(0, 5)
+        self.debt_table.setHorizontalHeaderLabels(["Fecha", "Total", "Pagado", "Deuda", "Detalle"])
         self.debt_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        scroll_layout.addWidget(self.debt_table)
-        
-        self.debt_table.cellClicked.connect(self.mostrar_detalle_ventana)
-        self.debt_table.cellEntered.connect(self.mostrar_tooltip_detalle)
+        self.debt_table.verticalHeader().setVisible(False)
+        self.debt_table.setAlternatingRowColors(True)
+        self.debt_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.debt_table.cellDoubleClicked.connect(self.mostrar_detalle_deuda)
+        debt_layout.addWidget(self.debt_table)
+
+        tables_layout.addLayout(debt_layout)
 
         # Tabla de pagos
-        scroll_layout.addWidget(QLabel("Pagos del Cliente:"))
+        payment_layout = QVBoxLayout()
+        payment_layout.addWidget(QLabel("<b>Pagos Realizados</b>"))
         self.payment_table = QTableWidget(0, 2)
+        self.payment_table.verticalHeader().setVisible(False)
         self.payment_table.setHorizontalHeaderLabels(["Fecha", "Monto"])
-        self.payment_table.horizontalHeader().setStretchLastSection(True)
         self.payment_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        scroll_layout.addWidget(self.payment_table)
+        self.payment_table.setAlternatingRowColors(True)
+        self.payment_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        payment_layout.addWidget(self.payment_table)
 
-        # Configurar el área desplazable
-        scroll_area.setWidget(scroll_content)
-        layout.addWidget(scroll_area)
+        tables_layout.addLayout(payment_layout)
+        main_layout.addLayout(tables_layout)
+
+        # Espaciado final
+        spacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+        main_layout.addSpacerItem(spacer)
 
         # Configuración final
-        self.setLayout(layout)
+        self.setLayout(main_layout)
 
         # Cargar datos iniciales
         self.cargar_clientes()
+        
+    def mostrar_detalle_deuda(self, row, column):
+        """Muestra el detalle de la deuda seleccionada en una nueva ventana."""
+        if row < 0:  # Verifica que la fila sea válida
+            return
 
+        # Obtener la deuda seleccionada
+        deuda = {
+            "fecha": self.debt_table.item(row, 0).text(),
+            "monto_total": float(self.debt_table.item(row, 1).text().replace('$', '').replace(',', '')),
+            "monto_pagado": float(self.debt_table.item(row, 2).text().replace('$', '').replace(',', '')),
+            "monto": float(self.debt_table.item(row, 3).text().replace('$', '').replace(',', '')),
+            "detalle": self.debt_table.item(row, 4).text()
+        }
+
+        # Aquí deberías buscar el detalle real de la deuda en tu estructura de datos
+        # Por ejemplo, podrías tener una lista de resultados que contenga todas las deudas
+        # y buscar la deuda correspondiente por algún identificador.
+
+        # Abre la ventana de detalle
+        dialog = DetalleDeudaDialog(deuda, self)
+        dialog.exec()  # Cambiar exec_() por exec()            
+            
     def agregar_cliente(self):
         """Agrega un cliente a la base de datos."""
         nombre_cliente = self.client_name_input.text().strip()
@@ -102,14 +180,11 @@ class ClientesTab(QWidget):
             QMessageBox.warning(self, "Error", "El nombre del cliente no puede estar vacío.")
             return
 
-        # Lógica para insertar cliente en la base de datos
         exito = agregar_cliente_a_db(nombre_cliente)
         if exito:
             QMessageBox.information(self, "Éxito", f"Cliente '{nombre_cliente}' agregado correctamente.")
             self.client_name_input.clear()
-            self.cargar_clientes()  # Recargar lista de clientes
-            signals.cliente_agregado.emit()  # Emitir la señal
-
+            self.cargar_clientes()
         else:
             QMessageBox.warning(self, "Error", "No se pudo agregar el cliente.")
 
@@ -122,79 +197,49 @@ class ClientesTab(QWidget):
             self.client_selector.addItem(cliente["nombre"], cliente["id"])
 
     def cargar_datos_cliente(self):
-        """Carga las deudas y pagos del cliente seleccionado y actualiza la deuda total."""
+        """Carga las deudas y pagos del cliente seleccionado."""
         cliente_id = self.client_selector.currentData()
         if cliente_id is None:
             self.debt_table.setRowCount(0)
             self.payment_table.setRowCount(0)
-            self.total_debt_label
             self.total_debt_label.setText("Deuda Total: $0.00")
+            self.total_debt_label.hide()
+            self.client_pay_input.hide()
+            self.register_pay_button.hide()
             return
 
-        # Obtener deudas con detalles de ventas
         deudas = obtener_detalle_ventas_deudas(cliente_id)
         pagos = obtener_pagos_cliente(cliente_id)
 
         # Calcular deuda total
         total_deuda = sum(deuda["monto"] for deuda in deudas)
-        total_pagos = sum(pago["monto"] for pago in pagos)
-        deuda_final = total_deuda - total_pagos
+        total_pagado = sum(pago["monto"] for pago in pagos if pago["venta_id"] in [deuda["venta_id"] for deuda in deudas])  # Filtrar pagos
+        total_ventas = sum(deuda["monto_total"] for deuda in deudas)
+        deuda_restante = total_ventas - total_pagado  # Calcular deuda restante
 
-        # Actualizar etiqueta de deuda total
-        self.total_debt_label.setText(f"Deuda Total: ${deuda_final:.2f}")
+        self.total_debt_label.setText(f"Deuda Total: ${total_ventas:.2f}, Pagado: ${total_pagado:.2f}, Deuda Restante: ${deuda_restante:.2f}")
+        self.total_debt_label.show()
+        self.client_pay_input.show()
+        self.register_pay_button.show()
 
         # Mostrar deudas en la tabla
         self.debt_table.setRowCount(len(deudas))
         for row, deuda in enumerate(deudas):
-            fecha_formateada = datetime.strptime(deuda["fecha"], "%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y %H:%M")
-            # Convertir el detalle en un texto para mostrar
-            detalle_texto = "\n".join([
-                f"{item['nombre']} - {item['cantidad']:.2f}kg x ${item['precio_unitario']}/kg" if isinstance(item['cantidad'], float) and not item['cantidad'].is_integer() 
-                else f"{item['nombre']} - {int(item['cantidad'])} x ${item['precio_unitario']}" 
-                for item in deuda["detalle"]
-            ])
+            self.debt_table.setItem(row, 0, QTableWidgetItem(deuda["fecha"]))
+            self.debt_table.setItem(row, 3, QTableWidgetItem(f"${deuda['monto']:.2f}"))
+            self.debt_table.setItem(row, 1, QTableWidgetItem(f"${deuda['monto_total']:.2f}"))  # Monto total
+            self.debt_table.setItem(row, 2, QTableWidgetItem(f"${deuda['monto_pagado']:.2f}"))  # Monto pagado
 
-            # Insertar datos en la tabla
-            self.debt_table.setItem(row, 0, QTableWidgetItem(fecha_formateada))
-            self.debt_table.setItem(row, 1, QTableWidgetItem(f"${deuda['monto']:.2f}"))
-            self.debt_table.setItem(row, 2, QTableWidgetItem(detalle_texto))
+            # Convertir la lista de detalles en un string
+            detalles_str = ", ".join([f"{detalle['nombre']} (x{detalle['cantidad']})" for detalle in deuda["detalle"]])
+            self.debt_table.setItem(row, 4, QTableWidgetItem(detalles_str))  # Detalles de la venta
 
         # Mostrar pagos en la tabla
         self.payment_table.setRowCount(len(pagos))
         for row, pago in enumerate(pagos):
-            fecha_formateada = datetime.strptime(pago["fecha"], "%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y %H:%M")
-            self.payment_table.setItem(row, 0, QTableWidgetItem(fecha_formateada))
+            self.payment_table.setItem(row, 0, QTableWidgetItem(pago["fecha"]))
             self.payment_table.setItem(row, 1, QTableWidgetItem(f"${pago['monto']:.2f}"))
-            
-            
-    def mostrar_tooltip_detalle(self, row, column):
-        # Solo mostrar el tooltip si estamos en la columna de detalles
-        if column == 3:
-            item = self.table.item(row, column)
-            if item:
-                QToolTip.showText(self.debt_table.viewport().mapToGlobal(self.debt_table.visualItemRect(item).center()), item.text(), self.debt_table)
 
-    def mostrar_detalle_ventana(self, row, column):
-        # Solo mostrar la ventana emergente si estamos en la columna de detalles
-        if column == 2:
-            item = self.debt_table.item(row, column)
-            if item:
-                # Crear y mostrar una ventana emergente con el detalle completo
-                mensaje = QMessageBox(self)
-                mensaje.setWindowTitle("Detalle Completo")
-                mensaje.setText(item.text())
-                mensaje.exec()
-
-    def mostrar_deuda_cliente(self):
-        """Muestra u oculta el selector de cliente según el método de pago."""
-        if self.client_selector.currentText() != "-- Seleccione un cliente --":
-            self.total_debt_label.show()
-            self.client_pay_input.show()
-            self.register_pay_button.show()
-        else:
-            self.total_debt_label.hide()
-            self.client_pay_input.hide()
-            self.register_pay_button.hide()
 
     def registrar_pago(self):
         """Registra un pago para el cliente seleccionado."""
@@ -211,20 +256,22 @@ class ClientesTab(QWidget):
             QMessageBox.warning(self, "Error", f"Monto inválido: {e}")
             return
 
-        # Obtener la deuda total actual
+        # Verificar la deuda total actual
         deudas = obtener_deudas_cliente(cliente_id)
-        pagos = obtener_pagos_cliente(cliente_id)
-        deuda_total = sum(deuda["monto"] for deuda in deudas) - sum(pago["monto"] for pago in pagos)
-        print(deuda_total)
+        total_deuda = sum(deuda["monto"] for deuda in deudas)
 
-        if monto > deuda_total:
+        if total_deuda == 0:
+            QMessageBox.information(self, "Sin deudas", "El cliente no tiene deudas pendientes.")
+            return
+
+        if monto > total_deuda:
             # Ajustar el monto al total de la deuda si es mayor
             QMessageBox.information(
                 self, 
                 "Aviso", 
-                f"El monto ingresado excede la deuda total. Se ajustará el pago a ${deuda_total:.2f}."
+                f"El monto ingresado excede la deuda total. Se ajustará el pago a ${total_deuda:.2f}."
             )
-            monto = deuda_total
+            monto = total_deuda
 
         # Registrar el pago con el monto ajustado
         exito = registrar_pago_cliente(cliente_id, monto)

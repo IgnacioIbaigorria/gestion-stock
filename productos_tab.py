@@ -1,12 +1,12 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QHeaderView, QTableWidgetItem, QLineEdit, QTableWidget, QComboBox, QHBoxLayout, QLabel, QMessageBox
-from db import agregar_producto, actualizar_producto, buscar_producto, eliminar_producto, existe_producto
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QDialog ,QAbstractItemView, QPushButton, QHeaderView, QTableWidgetItem, QLineEdit, QTableWidget, QComboBox, QHBoxLayout, QLabel, QMessageBox, QInputDialog
+from db_postgres import agregar_producto, actualizar_producto, buscar_producto, eliminar_producto, existe_producto, verificar_credenciales
 from signals import signals
 from PyQt6.QtCore import Qt
 
 class ProductosTab(QWidget):
-    def __init__(self):
+    def __init__(self, usuario_actual):
         super().__init__()
-        
+        self.usuario_actual = usuario_actual
         self.setObjectName("productos")
 
         # Layout principal
@@ -16,7 +16,8 @@ class ProductosTab(QWidget):
         self.search_bar = QLineEdit()
         self.search_bar.setPlaceholderText("Buscar producto por nombre o código de barras")
         self.search_bar.textChanged.connect(self.buscar_productos)
-        signals.venta_realizada.connect(self.buscar_productos)
+        signals.venta_realizada.connect(self.cargar_productos)
+        signals.actualizar_modificaciones.connect(self.cargar_productos)
         layout.addWidget(self.search_bar)
 
         # Tabla de productos
@@ -24,6 +25,8 @@ class ProductosTab(QWidget):
         self.table.setObjectName("productTable")
         self.table.setHorizontalHeaderLabels(["Código", "Nombre", "Cantidad", "Tipo de Venta","Costo", "Venta", "Margen"])
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.verticalHeader().setVisible(True)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.itemSelectionChanged.connect(self.cargar_datos_producto)  # Conectar selección a método
         layout.addWidget(self.table)
@@ -84,7 +87,12 @@ class ProductosTab(QWidget):
         self.setLayout(layout)
 
         # Cargar todos los productos al iniciar
-        self.buscar_productos()
+        self.cargar_productos()
+        
+    def cargar_productos(self):
+        """Carga todos los productos desde la base de datos y los almacena en memoria."""
+        self.productos = buscar_producto()  # Cargar todos los productos
+        self.actualizar_tabla(self.productos)  # Mostrar todos los productos en la tabla
         
     def calcular_margen_o_precio_venta(self):
         """
@@ -115,18 +123,36 @@ class ProductosTab(QWidget):
             precio_costo_calculado = venta / (1 + (margen / 100))
             self.precio_costo.setText(f"{precio_costo_calculado:.2f}")
 
+    def verificar_credenciales_usuario(self):
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("Verificación")
+        dialog.setLabelText("Ingrese su contraseña:")
+        dialog.setTextEchoMode(QLineEdit.EchoMode.Password)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            password = dialog.textValue()
+            # Verificar las credenciales del usuario actual
+            if verificar_credenciales(self.usuario_actual, password)[0]:
+                return True
+        return False
+
     def agregar_producto(self):
-        if not self.codigo_barras.text() or not self.nombre.text():
-            QMessageBox.warning(self, "Error", "Por favor, complete todos los campos requeridos.")
+        if not self.verificar_credenciales_usuario():
+            QMessageBox.warning(self, "Error", "Contraseña incorrecta")
+            return
+
+        # Solo validamos el nombre como campo requerido
+        if not self.nombre.text():
+            QMessageBox.warning(self, "Error", "Por favor, ingrese al menos el nombre del producto.")
             return
         
-        codigo = self.codigo_barras.text()
+        codigo = self.codigo_barras.text() or None  # Si está vacío, será None
         nombre = self.nombre.text()
         venta_por_peso = 1 if self.tipo_venta.currentText() == "Por Peso" else 0
 
-        # Verificar duplicados
-        if existe_producto(codigo, nombre):
-            QMessageBox.warning(self, "Error", "Ya existe un producto con ese código de barras o nombre.")
+        # Verificar duplicados solo por nombre
+        if existe_producto(None, nombre):  # Modificar la función existe_producto
+            QMessageBox.warning(self, "Error", "Ya existe un producto con ese nombre.")
             return
 
         try:
@@ -140,21 +166,26 @@ class ProductosTab(QWidget):
             QMessageBox.warning(self, "Error", "Los campos de cantidad, costo, venta y margen deben ser números.")
             return
 
-        if agregar_producto(codigo, nombre, costo, venta, margen, cantidad, venta_por_peso):
+        if agregar_producto(codigo, nombre, costo, venta, margen, cantidad, venta_por_peso, self.usuario_actual):
             QMessageBox.information(self, "Éxito", "Producto agregado correctamente")
             self.limpiar_entradas()
-            self.buscar_productos()
+            self.cargar_productos()
+            signals.producto_actualizado.emit()
         else:
             QMessageBox.warning(self, "Error", "No se pudo agregar el producto")
 
     def actualizar_producto(self):
-        # Validación de campos
-        if not self.codigo_barras.text() or not self.nombre.text():
-            QMessageBox.warning(self, "Error", "Por favor, complete todos los campos requeridos.")
+        if not self.verificar_credenciales_usuario():
+            QMessageBox.warning(self, "Error", "Contraseña incorrecta")
             return
-                
-        codigo = self.codigo_barras.text()
-        nombre = self.nombre.text()
+
+        # Validación de campos
+        if not self.codigo_barras.text() and not self.nombre.text():
+            QMessageBox.warning(self, "Error", "Por favor, complete al menos el código de barras o el nombre del producto.")
+            return
+            
+        codigo = self.codigo_barras.text() or None
+        nombre = self.nombre.text() or None
         venta_por_peso = 1 if self.tipo_venta.currentText() == "Por Peso" else 0
 
         # Intentar convertir los valores de costo, venta y margen
@@ -169,11 +200,13 @@ class ProductosTab(QWidget):
             QMessageBox.warning(self, "Error", "Los campos de cantidad, costo, venta y margen deben ser números.")
             return
 
+
         # Actualizar el producto en la base de datos
-        if actualizar_producto(codigo, nombre, costo, venta, margen, cantidad, venta_por_peso):
+        if actualizar_producto(codigo, nombre, costo, venta, margen, cantidad, venta_por_peso, self.usuario_actual):
             QMessageBox.information(self, "Éxito", "Producto actualizado correctamente")
             self.limpiar_entradas()
-            self.buscar_productos()  # Actualizar lista de productos
+            self.cargar_productos()  # Actualizar lista de productos
+            signals.producto_actualizado.emit()
         else:
             QMessageBox.warning(self, "Error", "No se pudo actualizar el producto")
             
@@ -202,34 +235,41 @@ class ProductosTab(QWidget):
 
 
     def eliminar_producto(self):
-        # Crear el cuadro de diálogo de pregunta
-        mensaje = QMessageBox(self)
-        mensaje.setWindowTitle("Eliminar producto")
-        mensaje.setText("¿Está seguro de eliminar el producto?")
-        mensaje.setIcon(QMessageBox.Icon.Question)
-        
-        # Personalizar los botones
-        btn_si = mensaje.addButton("Sí", QMessageBox.ButtonRole.YesRole)  # Correcto para PyQt6
-        btn_no = mensaje.addButton("No", QMessageBox.ButtonRole.NoRole)  # Correcto para PyQt6
-        
-        # Establecer el botón por defecto
-        mensaje.setDefaultButton(btn_no)
-        
-        # Mostrar el cuadro de diálogo
-        mensaje.exec()
-
-        # Verificar cuál botón fue presionado
-        if mensaje.clickedButton() == btn_si:
-            nombre = self.nombre.text()
-            if eliminar_producto(nombre):
-                QMessageBox.information(self, "Éxito", "Producto eliminado correctamente")
-                self.limpiar_entradas()
-                self.buscar_productos()
-            else:
-                QMessageBox.warning(self, "Error", "No se pudo eliminar el producto")
-        else:
+        if not self.verificar_credenciales_usuario():
+            QMessageBox.warning(self, "Error", "Contraseña incorrecta")
             return
+
+        nombre = self.nombre.text()
+        if not nombre:
+            QMessageBox.warning(self, "Error", "Seleccione un producto para eliminar")
+            return
+
+        # First try normal deletion
+        success, message = eliminar_producto(nombre, self.usuario_actual, force_delete=False)
+        
+        if not success and "tiene ventas asociadas" in message:
+            # Ask user if they want to force delete
+            respuesta = QMessageBox.question(
+                self,
+                "Producto con ventas",
+                "Este producto tiene ventas asociadas. ¿Desea marcarlo como eliminado de todos modos?\n"
+                "Esto mantendrá el historial de ventas pero el producto no estará disponible para nuevas ventas.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
             
+            if respuesta == QMessageBox.StandardButton.Yes:
+                # Try force delete
+                success, message = eliminar_producto(nombre, self.usuario_actual, force_delete=True)
+        
+        if success:
+            QMessageBox.information(self, "Éxito", message)
+            self.limpiar_entradas()
+            self.cargar_productos()
+            signals.producto_actualizado.emit()
+        else:
+            QMessageBox.warning(self, "Error", message)                
+                        
     def actualizar_tabla(self, productos):
         # Limpiar la tabla y mostrar los productos
         self.table.setRowCount(0)
@@ -237,29 +277,46 @@ class ProductosTab(QWidget):
             row = self.table.rowCount()
             self.table.insertRow(row)
 
-            for i, dato in enumerate(producto):
+            # Map database columns to table columns:
+            # Table columns: ["Código", "Nombre", "Cantidad", "Tipo de Venta", "Costo", "Venta", "Margen"]
+            # DB columns:    [id, codigo_barras, nombre, venta_por_peso, disponible, precio_costo, precio_venta, margen_ganancia]
+            
+            mapping = {
+                1: 0,  # codigo_barras -> Código
+                2: 1,  # nombre -> Nombre
+                4: 2,  # disponible -> Cantidad
+                3: 3,  # venta_por_peso -> Tipo de Venta
+                5: 4,  # precio_costo -> Costo
+                6: 5,  # precio_venta -> Venta
+                7: 6   # margen_ganancia -> Margen
+            }
+
+            for db_index, table_index in mapping.items():
+                dato = producto[db_index]
+
                 # Convertir "venta_por_peso" a texto "Unidad" o "Peso"
-                if i == 3:  # Suponiendo que la columna venta_por_peso está en la posición 3
-                    es_por_peso = dato == 1  # True si es por peso
-                    dato = "Unidad" if not es_por_peso else "Peso"
+                if db_index == 3:
+                    dato = "Peso" if dato == 1 else "Unidad"
 
-                # Formatear la columna "Cantidad" (posición 2) como entero si es por unidad
-                if i == 2:  # Suponiendo que la columna cantidad está en la posición 2
-                    cantidad = float(producto[2])  # Asegúrate de que el valor sea float
-                    if not producto[3]:  # Si venta_por_peso es 0
-                        dato = int(cantidad)  # Convertir a entero
+                # Formatear la columna "Cantidad"
+                if db_index == 4:
+                    cantidad = float(dato)
+                    if producto[3] == 0:  # Si venta_por_peso es 0
+                        dato = int(cantidad)
                     else:
-                        dato = cantidad  # Mantenerlo como float
+                        dato = cantidad
 
-                # Añadir el dato procesado a la celda correspondiente
-                self.table.setItem(row, i, QTableWidgetItem(str(dato)))
-
+                self.table.setItem(row, table_index, QTableWidgetItem(str(dato)))
+                
     def buscar_productos(self):
-        # Filtrado de productos según la búsqueda
-        term = self.search_bar.text()
-        productos = buscar_producto(term)
-        self.actualizar_tabla(productos)
-    
+        """Filtra los productos según la búsqueda en la barra de búsqueda."""
+        term = self.search_bar.text().lower()  # Convertir a minúsculas para comparación
+        productos_filtrados = [
+            producto for producto in self.productos
+            if term in producto[1].lower() or term in producto[2].lower()  # Comparar con nombre y código
+        ]
+        self.actualizar_tabla(productos_filtrados)  # Actualizar la tabla con los productos filtrados 
+           
     def limpiar_entradas(self):
         # Desconectar señales para evitar cálculos automáticos al limpiar
         self.precio_costo.textChanged.disconnect()
@@ -279,5 +336,4 @@ class ProductosTab(QWidget):
         self.precio_costo.textChanged.connect(self.calcular_margen_o_precio_venta)
         self.precio_venta.textChanged.connect(self.calcular_margen_o_precio_venta)
         self.margen_ganancia.textChanged.connect(self.calcular_margen_o_precio_venta)
-
-                
+    
