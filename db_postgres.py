@@ -21,6 +21,7 @@ logger = logging.getLogger('db_postgres')
 config = get_db_config()
 DB_CONFIG = config
 
+# En la configuración del pool (~línea 24)
 connection_pool = ThreadedConnectionPool(
     minconn=5,
     maxconn=20,
@@ -28,36 +29,14 @@ connection_pool = ThreadedConnectionPool(
     database=DB_CONFIG['database'],
     user=DB_CONFIG['user'],
     password=DB_CONFIG['password'],
-    port=DB_CONFIG['port']
+    port=DB_CONFIG['port'],
+    keepalives=1,  # Mantener conexiones activas
+    keepalives_idle=60,    # Enviar señal cada 60 segundos
+    keepalives_interval=30,# Reintentar cada 30 segundos si falla
+    keepalives_count=5,    # Máximo 5 intentos
+    options='-c statement_timeout=30000',
+    application_name='GestionDietetica'
 )
-
-@contextmanager
-def get_db_connection(expected_slow=False):
-    conn = get_connection()
-    start_time = time.time()
-    try:
-        # Set a longer statement timeout (10 minutes)
-        cursor = conn.cursor()
-        if expected_slow:
-            cursor.execute("SET statement_timeout = '600000'")  # 10 minutes in milliseconds
-        else:
-            cursor.execute("SET statement_timeout = '30000'")   # 30 seconds in milliseconds
-        
-        yield conn
-        
-        # Commit the transaction
-        conn.commit()
-    except Exception as e:
-        # Rollback in case of error
-        conn.rollback()
-        logger.error(f"Database error: {e}")
-        raise
-    finally:
-        # Return the connection to the pool
-        elapsed = time.time() - start_time
-        if elapsed > 0.5:  # Log if operation took more than 500ms
-            logger.info(f"Operación larga esperada ({elapsed:.2f}s) en __enter__")
-        connection_pool.putconn(conn)
 
 def return_connection(conn):
     connection_pool.putconn(conn)
@@ -65,37 +44,74 @@ def return_connection(conn):
 def get_connection():
     return connection_pool.getconn()
 
+
+@contextmanager
+def get_db_connection(expected_slow=False):
+    conn = get_connection()
+    start_time = time.time()
+    try:
+        # Verificar y resetear conexión
+        if conn.closed != 0:  # Si la conexión está cerrada
+            conn = connection_pool.getconn()  # Obtener nueva conexión
+            
+        # Resetear y verificar estado
+        conn.reset()
+        with conn.cursor() as test_cursor:
+            test_cursor.execute("SELECT 1")  # Consulta de prueba
+            
+        # Configurar timeout
+        cursor = conn.cursor()
+        if expected_slow:
+            cursor.execute("SET statement_timeout = '600000'")  # 10 minutos
+        else:
+            cursor.execute("SET statement_timeout = '30000'")  # 30 segundos
+            
+        yield conn
+        conn.commit()
+        
+    except psycopg2.OperationalError as e:
+        # Reconexión automática en caso de error
+        logger.error(f"Error de conexión: {e}, reintentando...")
+        conn.close()
+        conn = connection_pool.getconn()  # Nueva conexión
+        yield conn
+        conn.commit()
+        
+    finally:
+        # Devolver conexión al pool solo si está válida
+        if conn.closed == 0:
+            connection_pool.putconn(conn)
+
 def check_connection_health():
-    """Periodically check and refresh database connections to prevent timeouts"""
+    """Verificación cada 2 minutos"""
     while True:
         try:
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                # Simple query to keep the connection alive
-                cursor.execute("SELECT 1")
-                cursor.fetchone()
-                logger.debug("Connection health check successful")
+            # Verificar y mantener todas las conexiones del pool
+            for _ in range(connection_pool.minconn):
+                conn = connection_pool.getconn()
+                try:
+                    with conn.cursor() as cursor:
+                        cursor.execute("SELECT 1")
+                        connection_pool.putconn(conn)
+                except Exception as e:
+                    logger.error(f"Conexión defectuosa: {e}")
+                    conn.close()  # Descartar conexión mala
+            
+            # Verificar conexión externa
+            temp_conn = psycopg2.connect(
+                host=DB_CONFIG['host'],
+                database=DB_CONFIG['database'],
+                user=DB_CONFIG['user'],
+                password=DB_CONFIG['password'],
+                port=DB_CONFIG['port']
+            )
+            temp_conn.close()
+            
         except Exception as e:
-            logger.error(f"Connection health check failed: {e}")
-            # Try to recreate the connection pool if needed
-            try:
-                global connection_pool
-                if connection_pool is None or connection_pool.closed:
-                    logger.info("Recreating connection pool")
-                    connection_pool = ThreadedConnectionPool(
-                        minconn=5,
-                        maxconn=20,
-                        host=DB_CONFIG['host'],
-                        database=DB_CONFIG['database'],
-                        user=DB_CONFIG['user'],
-                        password=DB_CONFIG['password'],
-                        port=DB_CONFIG['port']
-                    )
-            except Exception as pool_error:
-                logger.error(f"Failed to recreate connection pool: {pool_error}")
-        
-        # Sleep for 5 minutes before next check
-        time.sleep(300)  # 5 minutes in seconds
+            logger.error(f"Error crítico: {e}")
+            connection_pool.closeall()  # Reiniciar todo el pool
+            
+        time.sleep(120)  # Verificar cada 2 minutos
 
 connection_health_thread = threading.Thread(
     target=check_connection_health, 
@@ -104,6 +120,25 @@ connection_health_thread = threading.Thread(
 )
 connection_health_thread.start()
 
+
+def _get_next_product_code(cursor):
+    """Finds the next available 5-digit numeric product code."""
+    try:
+        cursor.execute("""
+            SELECT MAX(CAST(codigo_barras AS INTEGER))
+            FROM productos
+            WHERE codigo_barras ~ '^\d{5}$' -- Matches exactly 5 digits
+              AND nombre NOT LIKE '[ELIMINADO]%'
+        """)
+        max_code = cursor.fetchone()[0]
+        next_code_num = (max_code or 0) + 1
+        if next_code_num > 99999:
+            logger.error("¡Se ha alcanzado el límite máximo de códigos de producto autogenerados (99999)!")
+            return None # Indicate failure
+        return "{:05d}".format(next_code_num)
+    except Exception as e:
+        logger.exception(f"Error al generar el siguiente código de producto: {e}")
+        return None # Indicate failure
 
 
 def cleanup_stale_connections():
@@ -227,7 +262,7 @@ def crear_tablas():
         campo_modificado TEXT,            -- NULL para ALTA/BAJA
         valor_anterior TEXT,              -- NULL para ALTA
         valor_nuevo TEXT,                 -- NULL para BAJA
-        FOREIGN KEY (producto_id) REFERENCES productos(id)
+        FOREIGN KEY (producto_id) REFERENCES productos(id) ON DELETE CASCADE
     )
     ''')
 
@@ -270,7 +305,10 @@ def existe_producto(codigo_barras, nombre):
 
 # Cache for 5 minutes
 productos_cache = {}  # Se borra en 5 minutos
-@lru_cache(maxsize=128)
+
+def clear_productos_cache():
+    productos_cache.clear()
+
 def get_cached_productos():
     if "productos" in productos_cache:
         return productos_cache["productos"]
@@ -312,8 +350,6 @@ def fetch_productos():
     return get_cached_productos()
 
 # Add this to clear cache when products are modified
-def clear_productos_cache():
-    productos_cache.clear()
     
 def registrar_modificacion(cursor, usuario, tipo_modificacion, producto_id, campo_modificado=None, valor_anterior=None, valor_nuevo=None):
     try:
@@ -348,6 +384,28 @@ def agregar_producto(codigo_barras, nombre, costo, venta, margen, cantidad, vent
     conn = get_connection()
     try:
         cursor = conn.cursor()
+        generated_code = False
+        # --- Start Edit: Code Generation and Uniqueness Check ---
+        if not codigo_barras:
+            # Generate the next code if none provided
+            codigo_barras = _get_next_product_code(cursor)
+            if codigo_barras is None:
+                # Failed to generate code (e.g., limit reached or DB error)
+                logger.error("No se pudo generar un código de barras único.")
+                # Consider returning a more specific error message if needed
+                return False, "Error al generar código de barras"
+            generated_code = True
+            logger.info(f"Código de barras no proporcionado. Generado: {codigo_barras}")
+        else:
+            # Check if user-provided code already exists for an active product
+            cursor.execute("""
+                SELECT 1 FROM productos
+                WHERE codigo_barras = %s AND nombre NOT LIKE '[ELIMINADO]%'
+            """, (codigo_barras,))
+            if cursor.fetchone():
+                logger.warning(f"Intento de agregar producto con código de barras duplicado (activo): {codigo_barras}")
+                return False, f"El código de barras '{codigo_barras}' ya existe para un producto activo."
+
         # Insert the product and get its ID
         cursor.execute('''
             INSERT INTO productos (codigo_barras, nombre, venta_por_peso, disponible, precio_costo, precio_venta, margen_ganancia)
@@ -373,13 +431,15 @@ def agregar_producto(codigo_barras, nombre, costo, venta, margen, cantidad, vent
         return_connection(conn)
         
         
-def actualizar_producto(codigo_barras=None, nombre=None, costo=None, venta=None, margen=None, cantidad=None, venta_por_peso=None, usuario=None):
+def actualizar_producto(codigo_barras=None, nombre=None, costo=None, venta=None, margen=None, cantidad=None, venta_por_peso=None, usuario=None, producto_id=None):
     conn = get_connection()
     cursor = conn.cursor()
     
     try:
         # Obtener el producto actual
-        if nombre is not None:
+        if producto_id is not None:
+            cursor.execute("SELECT * FROM productos WHERE id=%s", (producto_id,))
+        elif nombre is not None:
             cursor.execute("SELECT * FROM productos WHERE nombre=%s", (nombre,))
         elif codigo_barras is not None:
             cursor.execute("SELECT * FROM productos WHERE codigo_barras=%s", (codigo_barras,))
@@ -503,26 +563,14 @@ def eliminar_producto(codigo_o_nombre, usuario, force_delete=False):
                     WHERE producto_id = %s
                 """, (producto[0],))
                 
-                has_sales = cursor.fetchone()[0] > 0
                 
-                if has_sales and not force_delete:
-                    return False, "No se puede eliminar el producto porque tiene ventas asociadas. Use force_delete para eliminar de todos modos."
-                elif has_sales and force_delete:
-                    # Instead of deleting, mark as inactive and keep sales history
-                    cursor.execute("""
-                        UPDATE productos 
-                        SET disponible = 0,
-                            nombre = %s
-                        WHERE id = %s
-                    """, (f"[ELIMINADO] {producto[2]}", producto[0]))
-                else:
-                    # If no sales, perform actual deletion
-                    cursor.execute("""
-                        DELETE FROM productos 
-                        WHERE id = %s
-                    """, (producto[0],))
-                
-                # Register the modification
+                cursor.execute("""
+                    UPDATE productos 
+                    SET disponible = 0,
+                        nombre = %s
+                    WHERE id = %s
+                """, (f"[ELIMINADO] {producto[2]}", producto[0]))
+
                 registrar_modificacion(
                     cursor, 
                     usuario, 
@@ -530,12 +578,13 @@ def eliminar_producto(codigo_o_nombre, usuario, force_delete=False):
                     producto[0],
                     None,
                     f"Producto: {producto[2]} (Código: {producto[1]})",
-                    "Eliminación forzada" if (has_sales and force_delete) else None
+                    "Eliminación"
                 )
+                
                 
                 conn.commit()
                 clear_productos_cache()  # Clear the cache after deletion
-                return True, "Producto marcado como eliminado" if (has_sales and force_delete) else "Producto eliminado correctamente"
+                return True, "Producto marcado como eliminado"
                 
             except Exception as e:
                 conn.rollback()
@@ -589,9 +638,12 @@ def obtener_producto_por_codigo(codigo_barras):
                 SELECT id, codigo_barras, nombre, precio_costo, precio_venta, 
                        margen_ganancia, venta_por_peso, disponible
                 FROM productos
-                WHERE codigo_barras = %s
-                   OR (codigo_barras = %s AND %s)
-                   OR nombre ILIKE %s
+                WHERE (
+                    (codigo_barras = %s OR 
+                    (codigo_barras = %s AND %s) OR 
+                    nombre ILIKE %s)
+                    AND nombre NOT LIKE '[ELIMINADO]%%'
+                )
                 LIMIT 1
             ''', (codigo_barras, codigo_base, es_codigo_peso, f"%{codigo_barras}%"))
             
@@ -1274,3 +1326,417 @@ def modificar_columna_detalle_ventas():
             except Exception as e:
                 conn.rollback()
                 print(f"Error al modificar la columna: {e}")
+
+# Add these functions to your db_postgres.py file
+
+def agregar_lote_producto(producto_id, peso, codigo_unico=None, usuario=None):
+    """
+    Agrega un nuevo lote de un producto por peso
+    
+    Args:
+        producto_id: ID del producto
+        peso: Peso del lote en kg
+        codigo_unico: Código único opcional (si no se proporciona, se genera uno)
+        usuario: Usuario que realiza la operación
+    
+    Returns:
+        ID del lote creado o None si hay error
+    """
+    try:
+        if not codigo_unico:
+            import uuid
+            codigo_unico = str(uuid.uuid4())[:8].upper()
+            
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Insertar el nuevo lote
+            cursor.execute("""
+                INSERT INTO lotes_productos (producto_id, peso_lote, codigo_unico)
+                VALUES (%s, %s, %s)
+                RETURNING id
+            """, (producto_id, peso, codigo_unico))
+            
+            lote_id = cursor.fetchone()[0]
+            
+            # Actualizar el stock total del producto
+            cursor.execute("""
+                UPDATE productos
+                SET disponible = disponible + %s
+                WHERE id = %s
+            """, (peso, producto_id))
+            
+            # Registrar la modificación
+            if usuario:
+                registrar_modificacion(
+                    usuario, 
+                    "AGREGAR_LOTE", 
+                    producto_id, 
+                    "disponible", 
+                    None, 
+                    f"Lote {codigo_unico}: +{peso} kg"
+                )
+            
+            return lote_id
+    except Exception as e:
+        print(f"Error al agregar lote: {str(e)}")
+        return None
+
+def obtener_lotes_producto(producto_id, solo_disponibles=True):
+    """
+    Obtiene los lotes de un producto
+    
+    Args:
+        producto_id: ID del producto
+        solo_disponibles: Si es True, solo devuelve lotes disponibles
+    
+    Returns:
+        Lista de lotes o lista vacía si hay error
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            query = """
+                SELECT lp.id, lp.peso_lote, lp.fecha_creacion, lp.codigo_unico, lp.disponible
+                FROM lotes_productos lp
+                WHERE lp.producto_id = %s
+            """
+            
+            if solo_disponibles:
+                query += " AND lp.disponible = TRUE"
+                
+            query += " ORDER BY lp.fecha_creacion"
+            
+            cursor.execute(query, (producto_id,))
+            return cursor.fetchall()
+    except Exception as e:
+        print(f"Error al obtener lotes: {str(e)}")
+        return []
+
+def marcar_lote_como_vendido(lote_id):
+    """
+    Marca un lote como no disponible (vendido)
+    
+    Args:
+        lote_id: ID del lote
+    
+    Returns:
+        True si se actualizó correctamente, False en caso contrario
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE lotes_productos
+                SET disponible = FALSE
+                WHERE id = %s
+            """, (lote_id,))
+            return True
+    except Exception as e:
+        print(f"Error al marcar lote como vendido: {str(e)}")
+        return False
+
+def registrar_venta_con_lote(venta_id, producto_id, lote_id, cantidad, peso_vendido, usuario=None):
+    """
+    Registra una venta que incluye un lote específico
+    
+    Args:
+        venta_id: ID de la venta
+        producto_id: ID del producto
+        lote_id: ID del lote
+        cantidad: Cantidad (normalmente 1 para productos por peso)
+        peso_vendido: Peso vendido en kg
+        usuario: Usuario que realiza la operación
+    
+    Returns:
+        ID del detalle de venta o None si hay error
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Insertar detalle de venta con lote
+            cursor.execute("""
+                INSERT INTO detalle_ventas (venta_id, producto_id, lote_id, cantidad, peso_vendido)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
+            """, (venta_id, producto_id, lote_id, cantidad, peso_vendido))
+            
+            detalle_id = cursor.fetchone()[0]
+            
+            # Actualizar disponibilidad del lote
+            marcar_lote_como_vendido(lote_id)
+            
+            # Actualizar stock total del producto
+            cursor.execute("""
+                UPDATE productos
+                SET disponible = disponible - %s
+                WHERE id = %s
+            """, (peso_vendido, producto_id))
+            
+            # Registrar la modificación
+            if usuario:
+                registrar_modificacion(
+                    usuario, 
+                    "VENTA_LOTE", 
+                    producto_id, 
+                    "disponible", 
+                    None, 
+                    f"Venta lote ID {lote_id}: -{peso_vendido} kg"
+                )
+            
+            return detalle_id
+    except Exception as e:
+        print(f"Error al registrar venta con lote: {str(e)}")
+        return None
+
+def obtener_info_lote(lote_id):
+    """
+    Obtiene información detallada de un lote
+    
+    Args:
+        lote_id: ID del lote
+    
+    Returns:
+        Información del lote o None si hay error
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT lp.id, lp.producto_id, lp.peso_lote, lp.fecha_creacion, 
+                       lp.disponible, lp.codigo_unico, p.nombre, p.codigo_barras
+                FROM lotes_productos lp
+                JOIN productos p ON p.id = lp.producto_id
+                WHERE lp.id = %s
+            """, (lote_id,))
+            return cursor.fetchone()
+    except Exception as e:
+        print(f"Error al obtener información del lote: {str(e)}")
+        return None
+
+def generar_codigo_barras_lote(producto_codigo, lote_codigo, peso=None):
+    """
+    Genera un código de barras único para un lote específico
+    
+    Args:
+        producto_codigo: Código del producto base
+        lote_codigo: Código único del lote
+        peso: Peso del lote (opcional, para incluir en el código)
+    
+    Returns:
+        Código de barras completo para el lote
+    """
+    # Formato: PPPPPPLLLLWWWWC
+    # P: 6 dígitos para código de producto
+    # L: 4 dígitos para código de lote
+    # W: 4 dígitos para peso (con 3 decimales)
+    # C: 1 dígito de verificación
+    
+    # Asegurar que el código de producto tenga 6 dígitos
+    if not producto_codigo:
+        producto_codigo = "000000"
+    else:
+        producto_codigo = producto_codigo.zfill(6)[:6]
+    
+    # Convertir el código de lote a 4 dígitos
+    # Si es alfanumérico, convertir a un valor numérico
+    lote_num = 0
+    for char in lote_codigo:
+        lote_num = lote_num * 36 + (ord(char) - 48 if '0' <= char <= '9' else ord(char) - 87)
+    lote_codigo_num = str(lote_num % 10000).zfill(4)
+    
+    # Formatear el peso (si se proporciona)
+    if peso is not None:
+        # Convertir a 4 dígitos (3 decimales)
+        peso_str = str(int(peso * 1000)).zfill(4)[-4:]
+    else:
+        peso_str = "0000"
+    
+    # Combinar para formar el código base
+    codigo_base = f"{producto_codigo}{lote_codigo_num}{peso_str}"
+    
+    # Calcular dígito de verificación (algoritmo EAN)
+    suma_impares = sum(int(codigo_base[i]) for i in range(0, len(codigo_base), 2))
+    suma_pares = sum(int(codigo_base[i]) for i in range(1, len(codigo_base), 2))
+    total = suma_impares * 3 + suma_pares
+    digito_verificacion = (10 - (total % 10)) % 10
+    
+    # Código completo
+    return f"{codigo_base}{digito_verificacion}"
+
+def obtener_lote_por_codigo_barras(codigo_barras):
+    """
+    Busca un lote basado en un código de barras
+    
+    Args:
+        codigo_barras: Código de barras completo
+    
+    Returns:
+        Información del lote o None si no se encuentra
+    """
+    if len(codigo_barras) != 15:
+        return None
+    
+    # Extraer componentes
+    codigo_producto = codigo_barras[:6]
+    codigo_lote_num = codigo_barras[6:10]
+    
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Primero buscar el producto
+            cursor.execute("""
+                SELECT id FROM productos 
+                WHERE codigo_barras = %s
+            """, (codigo_producto.lstrip('0'),))
+            
+            producto_result = cursor.fetchone()
+            if not producto_result:
+                return None
+                
+            producto_id = producto_result[0]
+            
+            # Buscar lotes que coincidan con el código numérico
+            cursor.execute("""
+                SELECT lp.id, lp.producto_id, lp.peso_lote, lp.codigo_unico, 
+                       p.nombre, p.codigo_barras, p.precio_venta
+                FROM lotes_productos lp
+                JOIN productos p ON p.id = lp.producto_id
+                WHERE lp.producto_id = %s AND lp.disponible = TRUE
+            """, (producto_id,))
+            
+            lotes = cursor.fetchall()
+            
+            # Buscar el lote que coincida con el código numérico
+            for lote in lotes:
+                lote_id, _, peso_lote, codigo_unico, nombre, _, precio_venta = lote
+                
+                # Convertir el código único a su representación numérica
+                lote_num = 0
+                for char in codigo_unico:
+                    lote_num = lote_num * 36 + (ord(char) - 48 if '0' <= char <= '9' else ord(char) - 87)
+                lote_codigo_num = str(lote_num % 10000).zfill(4)
+                
+                if lote_codigo_num == codigo_lote_num:
+                    return {
+                        'lote_id': lote_id,
+                        'producto_id': producto_id,
+                        'nombre': nombre,
+                        'codigo_barras': codigo_producto,
+                        'peso': peso_lote,
+                        'precio_venta': precio_venta,
+                        'codigo_unico': codigo_unico
+                    }
+            
+            return None
+    except Exception as e:
+        print(f"Error al buscar lote por código de barras: {str(e)}")
+        return None
+
+def seleccionar_lote_para_venta(producto_id, peso_necesario):
+    """Selecciona el lote más antiguo disponible para la venta"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            # Buscar lotes disponibles ordenados por fecha más antigua
+            cursor.execute('''
+                SELECT id, peso_lote 
+                FROM lotes_productos 
+                WHERE producto_id = %s AND disponible = TRUE
+                ORDER BY fecha_creacion
+                FOR UPDATE SKIP LOCKED
+            ''', (producto_id,))
+            
+            lotes = cursor.fetchall()
+            
+            if not lotes:
+                return None, "No hay lotes disponibles"
+
+            # Usar el lote más antiguo
+            lote_id, peso_disponible = lotes[0]
+            
+            if peso_disponible < peso_necesario:
+                return None, "Peso insuficiente en el lote seleccionado"
+                
+            # Actualizar el lote
+            nuevo_peso = peso_disponible - peso_necesario
+            if nuevo_peso <= 0:
+                cursor.execute('''
+                    UPDATE lotes_productos 
+                    SET disponible = FALSE 
+                    WHERE id = %s
+                ''', (lote_id,))
+            else:
+                cursor.execute('''
+                    UPDATE lotes_productos 
+                    SET peso_lote = %s 
+                    WHERE id = %s
+                ''', (nuevo_peso, lote_id))
+            
+            conn.commit()
+            return lote_id, "Lote actualizado correctamente"
+            
+        except Exception as e:
+            conn.rollback()
+            return None, f"Error: {str(e)}"
+
+def actualizar_peso_lote(lote_id, nuevo_peso):
+    """Actualiza el peso restante de un lote"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE lotes_productos
+            SET peso_lote = %s
+            WHERE id = %s
+            RETURNING producto_id
+        ''', (nuevo_peso, lote_id))
+        producto_id = cursor.fetchone()[0]
+        conn.commit()
+        return producto_id
+
+def agregar_stock_manual_db(producto_id: int, cantidad: float, usuario: str, comentario: str = None):
+    """Agrega stock manualmente y registra la modificación"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            # Get current product details
+            cursor.execute('''
+                SELECT nombre, venta_por_peso, disponible 
+                FROM productos 
+                WHERE id = %s
+            ''', (producto_id,))
+            nombre_producto, es_por_peso, stock_actual = cursor.fetchone()
+            
+            # Update stock
+            cursor.execute('''
+                UPDATE productos 
+                SET disponible = disponible + %s 
+                WHERE id = %s
+            ''', (cantidad, producto_id))
+            
+            # Register modification with comment
+            unidad = 'kg' if es_por_peso else 'unidades'
+            descripcion = f"Agregado manual: {cantidad} {unidad}"
+            if comentario:
+                descripcion += f" - {comentario}"
+                
+            registrar_modificacion(
+                cursor,
+                usuario,
+                'MODIFICACION',
+                producto_id,
+                campo_modificado='Stock manual',
+                valor_anterior=str(stock_actual),
+                valor_nuevo=descripcion
+            )
+            
+            conn.commit()
+            return True
+            
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error agregando stock manual: {str(e)}")
+            return False

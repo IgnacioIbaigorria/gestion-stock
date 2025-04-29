@@ -25,6 +25,15 @@ CREATE TABLE IF NOT EXISTS productos (
     precio_venta REAL,
     margen_ganancia REAL
 );
+CREATE TABLE IF NOT EXISTS lotes_productos (
+    id SERIAL PRIMARY KEY,
+    producto_id INTEGER NOT NULL,
+    peso_lote REAL NOT NULL,
+    fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    disponible BOOLEAN DEFAULT TRUE,
+    codigo_unico TEXT,
+    FOREIGN KEY (producto_id) REFERENCES productos(id)
+);
 
 -- Tabla de ventas
 CREATE TABLE IF NOT EXISTS ventas (
@@ -39,9 +48,12 @@ CREATE TABLE IF NOT EXISTS detalle_ventas (
     id SERIAL PRIMARY KEY,
     venta_id INTEGER,
     producto_id INTEGER,
+    lote_id INTEGER,
     cantidad INTEGER,
+    peso_vendido REAL,
     FOREIGN KEY(venta_id) REFERENCES ventas(id),
     FOREIGN KEY(producto_id) REFERENCES productos(id)
+    FOREIGN KEY(lote_id) REFERENCES lotes_productos(id)
 );
 
 -- Tabla de deudas

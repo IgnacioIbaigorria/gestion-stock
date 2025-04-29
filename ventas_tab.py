@@ -1,5 +1,4 @@
 from datetime import datetime
-import sqlite3
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QDialog, QDialogButtonBox, QInputDialog, QPushButton, QHeaderView, QCompleter, QLineEdit, QTableWidget, QTableWidgetItem, QHBoxLayout, QLabel, QMessageBox, QComboBox
 from PyQt6.QtCore import Qt, QStringListModel
 from reportlab.lib.pagesizes import A4
@@ -7,7 +6,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import mm
 from reportlab.lib.utils import simpleSplit
 from config import get_db_path
-from db_postgres import fetch_productos, obtener_clientes, obtener_producto_por_codigo, obtener_producto_por_id,registrar_venta, buscar_coincidencias_producto
+from db_postgres import fetch_productos, obtener_lote_por_codigo_barras, obtener_info_lote, obtener_clientes, obtener_producto_por_codigo, obtener_producto_por_id,registrar_venta, buscar_coincidencias_producto
 import os
 from signals import signals
 import logging
@@ -182,10 +181,15 @@ class VentasTab(QWidget):
         self.inicializar_completers()
         
     def inicializar_completers(self):
-        """Inicializa los autocompletadores con datos actuales de productos."""
         nombres_productos = fetch_productos()
-        self.completer.setModel(QStringListModel(nombres_productos))
-
+        print(f"Nombres de productos: {nombres_productos}")
+        model = self.completer.model()
+        if not model or not isinstance(model, QStringListModel):
+            model = QStringListModel()
+            self.completer.setModel(model)
+        
+        # Update existing model
+        model.setStringList(nombres_productos)
 
     def mostrar_selector_cliente(self):
         """Muestra u oculta el selector de cliente según el método de pago."""
@@ -209,7 +213,7 @@ class VentasTab(QWidget):
             return
         
         print(f"Procesando entrada: {codigo_o_nombre}")
-        
+
         # Parsear el código de barras para determinar si es un producto a peso variable
         info_producto = parsear_codigo_producto(codigo_o_nombre)
         
@@ -228,9 +232,7 @@ class VentasTab(QWidget):
                 # Agregar el producto con el peso leído del código de barras
                 self.agregar_producto_con_peso(producto, peso_kg)
             else:
-                QMessageBox.warning(self, "Producto no encontrado", 
-                               f"No se encontró un producto con el código {codigo_producto}.")
-            print(f"No se encontró producto con código: {codigo_producto}")
+                QMessageBox.warning(self, "Producto no encontrado", f"No se encontró un producto con el código {codigo_producto}.")
         else:
             # Es un producto unitario o búsqueda por nombre
             print("Procesando como producto unitario o búsqueda por nombre")
@@ -296,7 +298,15 @@ class VentasTab(QWidget):
 
         # Verificar si hay suficiente stock disponible
         if venta_por_peso == 0:  # Producto vendido por unidad
-            cantidad_a_vender = 1
+            dialog = CustomInputDialog(f"Ingrese la cantidad para {nombre}:")
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                try:
+                    cantidad_a_vender = int(dialog.get_value())
+                    if cantidad_a_vender <= 0:
+                        QMessageBox.warning(self, "Error", "Cantidad inválida")
+                        return
+                except ValueError as e:
+                    QMessageBox.warning(self, "Valor inválido", str(e))
         else:
             # Aquí se abre el diálogo para ingresar el peso
             dialog = CustomInputDialog(f"Ingrese el peso en kilogramos para {nombre}:")
@@ -329,7 +339,7 @@ class VentasTab(QWidget):
             for i, (prod_id, cantidad_existente, precio_total_existente) in enumerate(self.lista_productos):
                 if prod_id == id:
                     # Producto ya existe, entonces vamos a sumar la cantidad
-                    nueva_cantidad = cantidad_existente + 1  # Aumentar la cantidad en 1
+                    nueva_cantidad = cantidad_existente + cantidad_a_vender  # Aumentar la cantidad en 1
                     nuevo_precio_total = nueva_cantidad * precio_venta
                     
                     # Actualizar en la tabla y en la lista de productos
@@ -348,7 +358,7 @@ class VentasTab(QWidget):
                     return  # Salir del método para evitar duplicados
 
             # Si el producto no estaba en la lista, se añade normalmente
-            cantidad = 1  # Asignar cantidad 1 directamente
+            cantidad = cantidad_a_vender  # Asignar cantidad 1 directamente
             precio_total = cantidad * precio_venta
 
             # Añadir el nuevo producto a la tabla
@@ -406,16 +416,23 @@ class VentasTab(QWidget):
 
                 # Obtener detalles del producto desde la lista
                 producto_id, cantidad_anterior, precio_total_anterior = self.lista_productos[row]
-                nueva_cantidad = int(item.text().strip())  # Asegúrate de que sea un entero
+                producto = obtener_producto_por_id(producto_id)
+
+                if not producto:
+                    logging.error(f"No se encontró el producto con ID {producto_id} al actualizar cantidad.")
+                    self.product_input.clear()
+                    return
+                stock_disponible = producto[7]
+                print(f"Producto en índice 6: {producto[6]}")
+                if (producto[6] == 1):
+                    nueva_cantidad = float(item.text().strip())
+                else:
+                    nueva_cantidad = int(item.text().strip())  # Asegúrate de que sea un entero
 
                 if nueva_cantidad <= 0:
                     QMessageBox.warning(self, "Error", "La cantidad debe ser mayor a 0.")
                     return
 
-                # Verificar stock disponible
-                cursor = sqlite3.connect(get_db_path()).cursor()
-                cursor.execute('SELECT disponible FROM productos WHERE id = ?', (producto_id,))
-                stock_disponible = cursor.fetchone()[0]
 
                 if nueva_cantidad > stock_disponible:
                     QMessageBox.warning(self, "Stock Insuficiente", f"No hay suficiente stock para el producto. Disponible: {int(stock_disponible)}, Solicitado: {nueva_cantidad}.")
@@ -567,19 +584,47 @@ class VentasTab(QWidget):
                 QMessageBox.information(self, "Venta registrada", "La venta se ha registrado correctamente.")
                 
                 # Verificar stock restante
-                for producto_id, cantidad, _ in self.lista_productos:
-                    cursor = sqlite3.connect(get_db_path()).cursor()
-                    cursor.execute('SELECT disponible, nombre FROM productos WHERE id = ?', (producto_id,))
-                    resultado = cursor.fetchone()  # Obtener el resultado de la consulta
+                try: # Add try-except block for robustness
+                    for producto_id, _, _ in self.lista_productos: # Iterate through products sold
+                        logging.debug(f"Verificando stock post-venta para producto ID: {producto_id} usando PostgreSQL.")
+                        # Use the existing function to get product details from PostgreSQL
+                        producto_actualizado = obtener_producto_por_id(producto_id)
 
-                    if resultado is None:
-                        logging.error(f"Producto no encontrado.")
-                        continue  # Si no se encuentra el producto, continuar con el siguiente
+                        if producto_actualizado is None:
+                            logging.error(f"Producto ID {producto_id} no encontrado en PostgreSQL durante la verificación de stock post-venta.")
+                            continue # Skip if product somehow not found
 
-                    stock_restante, nombre = resultado  # Desempaquetar el resultado
+                        # Assuming index 7 is stock ('disponible') and index 2 is 'nombre'
+                        # Adjust indices if your db_postgres functions return differently
+                        if len(producto_actualizado) > 7:
+                            stock_restante = producto_actualizado[7]
+                            nombre = producto_actualizado[2]
 
-                    if stock_restante <= 5:
-                        QMessageBox.warning(self, "Alerta de Stock Bajo", f"El stock del producto {nombre} es bajo. Restante: {int(stock_restante)}.")
+                            # Ensure stock_restante is comparable (e.g., convert Decimal to float/int if needed)
+                            try:
+                                # Example: Convert if stock_restante might be Decimal
+                                from decimal import Decimal
+                                if isinstance(stock_restante, Decimal):
+                                    stock_restante_num = float(stock_restante) # Or int() if always whole numbers
+                                else:
+                                    stock_restante_num = float(stock_restante) # Assume it can be float/int already
+                            except (ValueError, TypeError) as conv_err:
+                                logging.error(f"Error convirtiendo stock restante '{stock_restante}' para producto '{nombre}' (ID: {producto_id}): {conv_err}")
+                                continue # Skip this product if conversion fails
+
+                            logging.debug(f"Stock restante para '{nombre}' (ID: {producto_id}): {stock_restante_num}")
+
+                            # Check if stock is low (e.g., <= 5)
+                            if stock_restante_num <= 5:
+                                logging.warning(f"Alerta de Stock Bajo para '{nombre}'. Restante: {stock_restante_num}")
+                                QMessageBox.warning(self, "Alerta de Stock Bajo", f"El stock del producto {nombre} es bajo. Restante: {stock_restante_num:.2f}.") # Format as needed
+                        else:
+                            logging.warning(f"Datos incompletos recibidos de obtener_producto_por_id para ID {producto_id}. No se pudo verificar stock.")
+
+                except Exception as e:
+                    logging.exception("Error durante la verificación de stock post-venta:")
+                    QMessageBox.critical(self, "Error", f"Ocurrió un error al verificar el stock restante: {e}")
+                # --- Fin de la corrección ---
                 
                 self.limpiar_datos_venta()
             else:
@@ -719,3 +764,91 @@ class VentasTab(QWidget):
             QMessageBox.warning(self, "Error", f"No se pudo imprimir el ticket: {e}")
             return False  # Error en la impresión
     
+    
+    def agregar_lote_a_venta(self, info_lote):
+        """Agrega un lote específico a la venta actual"""
+        producto_id = info_lote['producto_id']
+        lote_id = info_lote['lote_id']
+        nombre = info_lote['nombre']
+        peso = info_lote['peso']
+        # Asegúrate de que obtener_lote_por_codigo_barras devuelva 'precio_venta'
+        precio_unitario = info_lote.get('precio_venta', 0) # Obtener precio_venta o default a 0
+        if precio_unitario == 0:
+             # Si no vino en info_lote, buscarlo en la tabla productos
+             producto_db = obtener_producto_por_id(producto_id)
+             if producto_db:
+                 precio_unitario = producto_db[4] # Asumiendo que el índice 4 es precio_venta
+
+        precio_total = peso * precio_unitario
+        codigo_unico = info_lote['codigo_unico']
+
+        print(f"Agregando Lote a Venta: ID={lote_id}, ProdID={producto_id}, Peso={peso}, PrecioU={precio_unitario}, PrecioT={precio_total}")
+
+        # Necesitas una función que agregue a la tabla y guarde la info del lote
+        self.agregar_item_a_tabla_ventas(
+            producto_id=producto_id,
+            nombre=f"{nombre} (Lote #{codigo_unico})",
+            cantidad=1, # Para lotes, la cantidad es 1 (el lote entero)
+            precio_unitario=precio_unitario, # Precio por KG
+            precio_total=precio_total, # Precio total del lote
+            lote_id=lote_id,
+            peso=peso # Guardamos el peso del lote
+        )
+
+    # Add or ensure this method exists (crucial for storing batch info)
+    def agregar_item_a_tabla_ventas(self, producto_id, nombre, cantidad, precio_unitario, precio_total, lote_id=None, peso=None):
+        """Agrega un item a la tabla de ventas con soporte opcional para lotes y peso."""
+        # Desconectar señal para evitar recursión o llamadas inesperadas
+        try:
+            self.table.itemChanged.disconnect(self.actualizar_cantidad_producto)
+        except TypeError:
+            pass # Ya estaba desconectada
+
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+
+        # Crear items
+        item_codigo = QTableWidgetItem(str(producto_id)) # Usar ID como código interno
+        item_nombre = QTableWidgetItem(nombre)
+        # Mostrar cantidad o peso formateado
+        if peso is not None:
+            item_cantidad = QTableWidgetItem(f"{peso:.3f} kg")
+            # Hacer la celda de cantidad no editable para pesos/lotes
+            item_cantidad.setFlags(item_cantidad.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        else:
+            item_cantidad = QTableWidgetItem(str(cantidad))
+            # Permitir edición para productos unitarios
+            item_cantidad.setFlags(item_cantidad.flags() | Qt.ItemFlag.ItemIsEditable)
+
+        item_precio_unitario = QTableWidgetItem(f"${precio_unitario:.2f}")
+        item_precio_total = QTableWidgetItem(f"${precio_total:.2f}")
+
+        # Añadir items a la tabla
+        self.table.setItem(row, 0, item_codigo) # Columna 0: ID Producto
+        self.table.setItem(row, 1, item_nombre) # Columna 1: Nombre (con info lote si aplica)
+        self.table.setItem(row, 2, item_cantidad) # Columna 2: Cantidad o Peso
+        self.table.setItem(row, 3, item_precio_total) # Columna 3: Precio Total
+
+        # --- Almacenamiento de datos importantes ---
+        # Guardar ID de producto real en UserRole del item de código/ID
+        item_codigo.setData(Qt.ItemDataRole.UserRole, producto_id)
+
+        # Guardar info de lote y peso en UserRole del item de cantidad/peso
+        lote_data = {}
+        if lote_id is not None:
+            lote_data['lote_id'] = lote_id
+        if peso is not None:
+            lote_data['peso'] = peso
+        # Guardar también si es unitario para diferenciar en registrar_venta
+        lote_data['es_lote_o_peso'] = (lote_id is not None or peso is not None)
+        lote_data['precio_unitario'] = precio_unitario # Guardar precio unitario para recálculos si es necesario
+
+        item_cantidad.setData(Qt.ItemDataRole.UserRole, lote_data if lote_data else None)
+        # -----------------------------------------
+
+        # Actualizar total y limpiar entrada
+        self.actualizar_total_venta() # Renombrar si es necesario
+        self.product_input.clear()
+
+        # Reconectar la señal
+        self.table.itemChanged.connect(self.actualizar_cantidad_producto)

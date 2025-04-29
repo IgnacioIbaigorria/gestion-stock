@@ -3,6 +3,8 @@ import os
 import site
 import sys
 from PyInstaller.utils.hooks import collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_data_files
+barcode_datas = collect_data_files('barcode')
 
 block_cipher = None
 
@@ -31,15 +33,19 @@ additional_binaries.extend(usb_dlls)
 a = Analysis(['main.py'],
     pathex=[],
     binaries=additional_binaries,  # Add the USB DLLs here
-    datas=[
-        ('styles.qss', '.'),  # Incluye el archivo de estilos
-        ('*.db', '.'),        # Incluye la base de datos si existe
-        ('client_secrets.json', '.'),  # Incluye el archivo de secretos de cliente
-        ('mycreds.txt', '.'),  # Incluye el archivo de credenciales
-        ('lisintac.png', '.'),  # Incluye el logo
-        ('spinner.gif', '.'),  # Incluye el gif del spinner (simplificado)
-        ('config_postgres.py', '.'),  # Incluye la configuración de PostgreSQL
-    ],
+    datas = [
+        ('styles.qss', '.'),
+        ('client_secrets.json', '.'),
+        ('mycreds.txt', '.'),
+        ('lisintac.png', '.'),
+        ('spinner.gif', '.'),
+        ('config_postgres.py', '.'),
+        (os.path.abspath('fonts') + '\\*', 'fonts'),  # Absolute path with wildcard
+        ('fonts/ARIAL.TTF', 'fonts'),
+        ('fonts/ARIALBD.TTF', 'fonts'),
+        ('fonts/arial.TTF', 'fonts'),
+        ('fonts/arialbd.TTF', 'fonts')
+    ] + barcode_datas,
     hiddenimports=[
         'PyQt6',
         'PyQt6.QtCore',
@@ -63,32 +69,25 @@ a = Analysis(['main.py'],
         'clientes_tab',
         'logica_codigo',
         'config',
+        'logging',
         'db',
         'sync',
         'backup',
-        # Remove escpos-related imports
-        # 'escpos',
-        # 'escpos.printer',
-        # 'escpos.constants',
-        # 'escpos.exceptions',
-        # 'escpos.capabilities',
-        # 'escpos.config',
-        # 'escpos.image',
-        # 'escpos.codepages',
-        # 'usb',
-        # 'usb.core',
-        # 'usb.util',
-        # 'usb.backend',
-        # 'usb.backend.libusb1',
         'PIL',
         'PIL.Image',
         'PIL.ImageDraw',
         'PIL.ImageFont',
+        'barcode',
+        'barcode.writer',
+        'win32print',
+        'win32api',
         'qrcode',
         'serial',
         'modificaciones',
         'login_window',
         'usuarios_tab',
+        'dateutil',
+        'win32timezone',
         'modificaciones_tab',
         'etiquetas_tab',
         'psycopg2',

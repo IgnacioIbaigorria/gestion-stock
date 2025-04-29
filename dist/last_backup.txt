@@ -1,1 +1,1 @@
-ERROR: Error creando el backup: [Errno 13] Permission denied: 'C:\\Users\\Backups\\backup_20250310_112852.db' - 2025-03-10 11:28:52
+ERROR: Error creando el backup: No se encuentra la base de datos en dietetica.db - 2025-04-25 12:25:47

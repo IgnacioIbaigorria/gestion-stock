@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QAbstractItemView, QHeaderView ,QTableWidget, QTableWidgetItem, QPushButton, QHBoxLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QDialogButtonBox, QDialog, QAbstractItemView, QHeaderView ,QTableWidget, QTableWidgetItem, QPushButton, QHBoxLayout
 from db_postgres import obtener_modificaciones
 from signals import signals 
 from datetime import datetime
@@ -24,7 +24,8 @@ class ModificacionesTab(QWidget):
         self.tabla.verticalHeader().setVisible(False)
         self.tabla.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tabla.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        
+        self.tabla.itemSelectionChanged.connect(self.mostrar_detalle)
+
         # Crear un layout horizontal para el botón
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()  # Esto empujará el botón hacia la derecha
@@ -112,3 +113,56 @@ class ModificacionesTab(QWidget):
 
         # Configurar un temporizador para esperar 1 segundo antes de cargar las modificaciones
         QTimer.singleShot(1000, self.cargar_modificaciones)  # Esperar 1000 milisegundos (1 segundo)
+
+    def mostrar_detalle(self):
+        selected = self.tabla.selectedItems()
+        if not selected:
+            return
+            
+        row = selected[0].row()
+        detalle = {
+            'usuario': self.tabla.item(row, 0).text(),
+            'fecha_hora': self.tabla.item(row, 1).text(),
+            'tipo': self.tabla.item(row, 2).text(),
+            'producto': self.tabla.item(row, 3).text(),
+            'campo': self.tabla.item(row, 4).text(),
+            'valor_anterior': self.tabla.item(row, 5).text(),
+            'valor_nuevo': self.tabla.item(row, 6).text()
+        }
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Detalle de Modificación")
+        layout = QVBoxLayout()
+        
+        # Special formatting for stock manual modifications
+        if detalle['campo'] == 'Stock manual':
+            contenido = f"""
+            <b>Usuario:</b> {detalle['usuario']}<br>
+            <b>Fecha:</b> {detalle['fecha_hora']}<br>
+            <b>Tipo:</b> {detalle['tipo']}<br>
+            <b>Producto:</b> {detalle['producto']}<br><br>
+            <b>Comentario:</b><br>{detalle['valor_nuevo']}
+            """
+        else:
+            contenido = f"""
+            <b>Usuario:</b> {detalle['usuario']}<br>
+            <b>Fecha:</b> {detalle['fecha_hora']}<br>
+            <b>Tipo:</b> {detalle['tipo']}<br>
+            <b>Producto:</b> {detalle['producto']}<br>
+            <b>Campo modificado:</b> {detalle['campo']}<br>
+            <b>Valor anterior:</b> {detalle['valor_anterior']}<br>
+            <b>Valor nuevo:</b> {detalle['valor_nuevo']}
+            """
+        
+        label = QLabel(contenido)
+        label.setWordWrap(True)
+        label.setMargin(10)
+        
+        # Add close button
+        botones = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        botones.rejected.connect(dialog.reject)
+        
+        layout.addWidget(label)
+        layout.addWidget(botones)
+        dialog.setLayout(layout)
+        dialog.exec()

@@ -240,6 +240,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(100, self._setup_pantalla_principal_parte3)
         elif self.rol_usuario == 'empleado':
             self.tabs.addTab(VentasTab(), "Ventas")
+            self.tabs.addTab(EtiquetasTab(), "Etiquetas")
             QTimer.singleShot(100, self._finalizar_setup)
 
     def _setup_pantalla_principal_parte3(self):
@@ -250,7 +251,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(100, self._finalizar_setup)
 
     def _finalizar_setup(self):
-        # Final setup
+        # Final setup==
         self.setup_barra_usuario()
         self.stacked_widget.setCurrentIndex(1)
         

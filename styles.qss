@@ -7,7 +7,7 @@
 }
 
 /* Estilos para el input del QInputDialog */
-.QInputDialog .QLineEdit {
+.QInputDialog .QLineEdit, QDoubleSpinBox {
     font-size: 20px;  /* Aumenta el tamaño de la fuente */
     border: 2px solid #cccccc;  /* Añade un borde más grueso */
     border-radius: 8px;  /* Bordes redondeados */

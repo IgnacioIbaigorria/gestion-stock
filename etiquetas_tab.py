@@ -6,12 +6,14 @@ from PyQt6.QtGui import QPixmap, QImage
 from db_postgres import buscar_producto, buscar_coincidencias_producto
 from logica_codigo import generar_codigo_variable_ean13, generar_csv_etiqueta, imprimir_etiqueta, imprimir_pdf_directo
 import os
+import sys
 import io
 from PIL import Image, ImageDraw, ImageFont
 import barcode
 from barcode.writer import ImageWriter
 from signals import signals
 import win32print  # Add this import for printer selection
+
 
 class EtiquetasTab(QWidget):
     def __init__(self):
@@ -74,19 +76,7 @@ class EtiquetasTab(QWidget):
         self.peso_input.setMinimumWidth(150)
         self.peso_input.valueChanged.connect(self.generar_vista_previa)
         form_layout.addRow("Peso:", self.peso_input)
-        
-        # Ruta de la plantilla
-        self.ruta_plantilla = QLineEdit()
-        self.ruta_plantilla.setPlaceholderText("Ruta a la plantilla de BarTender")
-        self.ruta_plantilla.setText(os.path.join(os.getcwd(), "plantilla_etiqueta.btw"))
-        form_layout.addRow("Plantilla:", self.ruta_plantilla)
-        
-        # Botón para seleccionar plantilla
-        self.btn_seleccionar_plantilla = QPushButton("Seleccionar")
-        self.btn_seleccionar_plantilla.setObjectName("btn_seleccionar_plantilla")
-        self.btn_seleccionar_plantilla.clicked.connect(self.seleccionar_plantilla)
-        form_layout.addRow("", self.btn_seleccionar_plantilla)
-
+                
         self.impresora_combo = QComboBox()
         self.impresora_combo.setObjectName("impresora_combo")
         self.cargar_impresoras()
@@ -167,9 +157,10 @@ class EtiquetasTab(QWidget):
         self.nombres_productos = []
         
         for producto in self.productos:
-            codigo = producto[1] or ""
-            nombre = producto[2]
-            self.nombres_productos.append(f"{codigo} - {nombre}")
+            if producto[3] == 1:
+                codigo = producto[1] or ""
+                nombre = producto[2]
+                self.nombres_productos.append(f"{codigo} - {nombre}")
         
         # Actualizar el modelo del completer
         model = QStringListModel()
@@ -181,12 +172,12 @@ class EtiquetasTab(QWidget):
         if len(texto) >= 2:  # Solo buscar si hay al menos 2 caracteres
             sugerencias = []
             for producto in self.productos:
-                codigo = producto[1] or ""
-                nombre = producto[2]
-                texto_producto = f"{codigo} - {nombre}"
-                
-                if texto.lower() in texto_producto.lower():
-                    sugerencias.append(texto_producto)
+                if producto[3] == 1:
+                    codigo = producto[1] or ""
+                    nombre = producto[2]
+                    texto_producto = f"{codigo} - {nombre}"
+                    if texto.lower() in texto_producto.lower():
+                        sugerencias.append(texto_producto)
             
             # Actualizar el modelo del completer
             model = QStringListModel()
@@ -381,24 +372,25 @@ class EtiquetasTab(QWidget):
         # 4x6 pulgadas a 300 DPI = 1200 x 1800 píxeles
         width, height = 1200, 1800
         etiqueta = Image.new('RGB', (width, height), color='white')
+
+        from logica_codigo import resource_path
         
         # Crear un objeto Draw para dibujar en la etiqueta
         draw = ImageDraw.Draw(etiqueta)
-        # Cargar fuentes - usar rutas del sistema Windows con tamaños ajustados para mayor resolución
         try:
-            # Intentar cargar fuentes del sistema
-            font_path = os.path.join(os.environ['WINDIR'], 'Fonts', 'arial.ttf')
-            font_bold_path = os.path.join(os.environ['WINDIR'], 'Fonts', 'arialbd.ttf')  # Arial Bold
-            font_title = ImageFont.truetype(font_bold_path, 90)    # Título en negrita
-            font_normal = ImageFont.truetype(font_path, 70)   # Tamaño para texto normal
-            font_ingredients = ImageFont.truetype(font_path, 60)  # Tamaño para ingredientes
-            font_small = ImageFont.truetype(font_path, 48)    # Tamaño para texto pequeño
-        except (IOError, KeyError):
-            # Si falla, usar fuentes por defecto
-            print("No se pudo cargar la fuente Arial, usando fuente por defecto")
-            font_title = ImageFont.load_default()
+            # Cargar fuentes usando resource_path
+            arial_path = resource_path('fonts/ARIAL.TTF')
+            arialbd_path = resource_path('fonts/ARIALBD.TTF')
+            
+            font_normal = ImageFont.truetype(arial_path, 70)
+            font_ingredients = ImageFont.truetype(arial_path, 50)
+            font_title = ImageFont.truetype(arialbd_path, 90)
+            
+        except Exception as e:
+            print(f"Error cargando fuentes: {e}, usando fuentes predeterminadas")
             font_normal = ImageFont.load_default()
-            font_small = ImageFont.load_default()
+            font_title = ImageFont.load_default()
+
         
         # Calcular márgenes y espaciado
         margin_x = 70  # Margen horizontal

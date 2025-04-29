@@ -10,48 +10,108 @@ Requisitos:
 """
 
 import barcode
+import traceback
 from barcode.writer import ImageWriter
 import csv
 import subprocess
 import os
+import sys
 import tempfile
 import win32api
 import win32print
+from PIL import ImageFont
+
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_path, relative_path)
+
 
 def generar_codigo_variable_ean13(product_code: str, weight_kg: float) -> str:
-    """
-    Genera un código EAN-13 variable que codifica el ID del producto y su peso.
-    """
-    # Convertir el peso a gramos y formatear a 5 dígitos (por ejemplo: 1.25 kg → "01250")
-    weight_g = int(weight_kg * 1000)
-    weight_str = str(weight_g).zfill(5)
+    """Genera un código EAN-13 variable..."""
     
-    # Asegurar que el código del producto tenga 5 dígitos (rellenando con ceros a la izquierda si es necesario)
-    product_code_padded = product_code.zfill(5)
+    print(f"\n[DEBUG] Iniciando generación de código para: {product_code}, peso: {weight_kg}kg")
     
-    # Construir la cadena base de 12 dígitos
-    raw_code_12 = "2" + "0" + product_code_padded + weight_str
+    # Font debugging
+    print("[DEBUG] Buscando fuentes en las siguientes rutas:")
+    possible_paths = [
+        os.path.join(os.environ['WINDIR'], 'Fonts', 'arial.ttf'),  # Windows
+        resource_path('fonts/ARIAL.TTF'),  # PyInstaller
+        resource_path('fonts/arial.ttf'),  # PyInstaller
+        os.path.join(os.path.dirname(__file__), 'fonts', 'ARIAL.TTF')  # Desarrollo
+    ]
     
-    # Generar el EAN-13; la librería calcula el dígito de control automáticamente.
+    font_path = None
+    for i, path in enumerate(possible_paths, 1):
+        exists = os.path.exists(path)
+        print(f"  {i}. {path} → {'EXISTE' if exists else 'NO EXISTE'}")
+        if exists and not font_path:
+            font_path = path
+            print(f"  ¡Fuente seleccionada: {path}!")
+
+    if not font_path:
+        print("[ERROR] No se encontró ninguna fuente válida en las rutas especificadas")
+        raise FileNotFoundError("No se pudo encontrar ninguna fuente válida")
+
+    print(f"[DEBUG] Intentando cargar fuente desde: {font_path}")
+    print(f"[DEBUG] Permisos de archivo: Lectura → {'SI' if os.access(font_path, os.R_OK) else 'NO'}")
+
     try:
-        ean = barcode.get('ean13', raw_code_12, writer=ImageWriter())
-        final_code = ean.get_fullcode()
+        font = ImageFont.truetype(font_path, size=12)
+        print("[DEBUG] Fuente cargada exitosamente")
         
-        # Usar un directorio temporal para guardar la imagen
-        import tempfile
+        # Add explicit font file verification for PyInstaller
+        print(f"[DEBUG] Información de fuente cargada:")
+        print(f" - Font path: {font.path}")
+        print(f" - Font size: {font.size}")
+        
+        # Add manual font path validation for PyInstaller environment
+        if hasattr(sys, '_MEIPASS'):
+            print("[DEBUG] Modo PyInstaller detectado - verificando acceso a fuente")
+            normalized_path = os.path.normpath(font_path)
+            print(f"[DEBUG] Ruta normalizada: {normalized_path}")
+            
+            if not os.access(normalized_path, os.R_OK):
+                raise OSError(f"PyInstaller no pudo empaquetar la fuente correctamente. Ruta inaccesible: {normalized_path}")
+
+    except Exception as e:
+        print(f"[ERROR] Fallo al cargar fuente: {str(e)}")
+        print("[DEBUG] Usando fuente predeterminada")
+        font = ImageFont.load_default()
+
+    # Barcode generation debugging
+    try:
+        weight_g = int(weight_kg * 1000)
+        weight_str = str(weight_g).zfill(5)
+        product_code_padded = product_code.zfill(5)
+        raw_code_12 = "2" + "0" + product_code_padded + weight_str
+        
+        print(f"[DEBUG] Código bruto generado: {raw_code_12}")
+        print(f"[DEBUG] Longitud código: {len(raw_code_12)} caracteres")
+
+        options = {
+            'font_path': font_path,
+            'font_size': 12,
+            'text_distance': 2.0,
+            'background': 'white',
+            'foreground': 'black',
+            'dpi': 300
+        }
+        writer = ImageWriter()
+        writer.set_options(options)
+        
+        print("[DEBUG] Creando objeto EAN13")
+        ean = barcode.get('ean13', raw_code_12, writer=writer)
+        
         temp_dir = tempfile.gettempdir()
         
-        # Asegurarse de que el directorio temporal existe
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        # Guardar con extensión .png explícita
         output_path = os.path.join(temp_dir, f"EAN_{product_code_padded}_{weight_str}")
+
         ean.save(output_path)
         
-        print(f"Código de barras generado y guardado en: {output_path}.png")
-        return final_code
+        return ean.get_fullcode()
+        
     except Exception as e:
-        print(f"Error al generar código de barras: {e}")
         raise
 
 def generar_csv_etiqueta(datos: dict, ruta_csv: str):
@@ -152,38 +212,6 @@ def imprimir_etiqueta(ruta_plantilla: str, ruta_csv: str) -> bool:
         print(traceback.format_exc())
         return False
 
-if __name__ == "__main__":
-    # Datos de prueba para la etiqueta (simula los datos que podrías obtener de tu DB)
-    product_code = "12345"        # Este es el código base del producto que guardas en la DB
-    product_name = "Manzana Golden"
-    ingredients = "100% manzana"
-    weight_kg = 1.25              # Peso en kilogramos obtenido (por ejemplo, del escaneo o balanza)
-    
-    # 1. Generar el código de barras EAN-13 variable en base al código y el peso.
-    codigo_barras = generar_codigo_variable_ean13(product_code, weight_kg)
-    print("Código EAN-13 generado:", codigo_barras)
-    
-    # 2. Reunir los datos para la etiqueta.
-    datos_producto = {
-        "Codigo": product_code,
-        "Nombre": product_name,
-        "Ingredientes": ingredients,
-        "CodigoBarras": codigo_barras,
-        "Peso": str(weight_kg)
-    }
-    
-    # 3. Generar el archivo CSV para la etiqueta.
-    # Se genera en el directorio actual; puedes modificar la ruta si lo requieres.
-    ruta_csv = os.path.join(os.getcwd(), "datos_etiqueta.csv")
-    generar_csv_etiqueta(datos_producto, ruta_csv)
-    
-    # 4. Definir la ruta de la plantilla de BarTender (.btw).
-    # Cambia esta ruta a la ubicación real de tu plantilla.
-    ruta_template = r"C:\ruta\etiqueta.btw"
-    
-    # 5. Llamar a BarTender para imprimir la etiqueta.
-    imprimir_etiqueta(ruta_template, ruta_csv)
-
 def imprimir_pdf_directo(ruta_pdf, impresora=None):
     """
     Imprime un archivo PDF directamente a una impresora específica.
@@ -203,7 +231,7 @@ def imprimir_pdf_directo(ruta_pdf, impresora=None):
         
         # Intentar usar SumatraPDF primero (más confiable para PDF)
         sumatra_paths = [
-            r"C:\Users\ignac\AppData\Local\SumatraPDF\SumatraPDF.exe",
+            r"C:\Users\Usuario\AppData\Local\SumatraPDF\SumatraPDF.exe",
             r"C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe",
             os.path.join(os.getcwd(), "SumatraPDF.exe")
         ]
